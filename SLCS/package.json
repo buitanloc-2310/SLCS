@@ -1,0 +1,23 @@
+{
+  "name": "sfn-slc",
+  "version": "23.0.0-product-completion",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler pages dev public",
+    "deploy": "npm run check && wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply sfn-slc-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply sfn-slc-db --local",
+    "check": "node --check src/index.js && node --check src/schema-v11.js && node --check src/live-room.js && node --check src/realtime-sfu.js && node --check src/v13-platform.js && node --check src/vplus-platform.js && node --check public/core/markdown.js && node --check public/classroom/screen-share.js && node --check public/classroom/beauty-processor.js && node --check public/app.js && node --check public/classroom/media-client.js && node --check public/classroom/classroom-plus.js && node --check public/ai/vplus-ai.js",
+    "validate:vplus": "npm run check && node scripts/validate-vplus.mjs",
+    "deploy:p0": "npm run deploy",
+    "validate:p0": "npm run validate:vplus && node scripts/validate-p0.mjs",
+    "validate:config": "node scripts/validate-config.mjs",
+    "validate:p2": "npm run validate:p0 && npm run validate:config && node scripts/validate-p2.mjs",
+    "test:core": "node scripts/test-core.mjs",
+    "verify:live": "wrangler tail slcs --format pretty"
+  },
+  "devDependencies": {
+    "wrangler": "^4.34.0"
+  }
+}

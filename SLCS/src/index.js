@@ -210,10 +210,22 @@ async function routeApi(request, env, ctx, url) {
   if (path === '/api/setup/installer-info' && method === 'GET') return ok({ installer_available:true });
 
   if (path === '/api/setup/status' && method === 'GET') {
+    // Bootstrap detection must be conservative: an existing user/admin always
+    // means this installation is initialized, even if a newer optional table
+    // is temporarily unavailable. Never invite a second bootstrap because a
+    // schema probe failed.
+    if(!env.DB) return ok({schema_ready:false,initialized:true,status:'unavailable'});
+    let userCount=null;
+    try {
+      const row=await env.DB.prepare(`SELECT COUNT(*) n FROM users`).first();
+      userCount=Number(row?.n||0);
+    } catch {}
+    if(userCount !== null && userCount > 0){
+      const ready=await schemaReady(env);
+      return ok({schema_ready:ready,initialized:true,user_count:userCount});
+    }
     const ready=await schemaReady(env);
-    if(!ready) return ok({schema_ready:false,initialized:false});
-    const row=await env.DB.prepare(`SELECT COUNT(*) n FROM users`).first();
-    return ok({schema_ready:true,initialized:Number(row?.n||0)>0});
+    return ok({schema_ready:ready,initialized:false});
   }
 
   if (path === '/api/setup/install' && method === 'POST') {

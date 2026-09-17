@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SLC — Email tự động mẫu</title>
+<style>
+body{margin:0;background:#f5eef7;font-family:Arial,Helvetica,sans-serif;color:#2a1d2b}
+.wrap{max-width:720px;margin:32px auto;padding:0 14px}
+.card{background:#fff;border-radius:28px;overflow:hidden;box-shadow:0 18px 55px rgba(53,20,52,.15)}
+.hero{padding:34px 34px 28px;background:linear-gradient(135deg,#351544 0%,#7f2457 48%,#ff7b57 100%);color:#fff}
+.logo{display:flex;align-items:center;gap:14px}
+.logo img{width:58px;height:58px;object-fit:contain;background:#fff;border-radius:18px;padding:6px}
+.kicker{font-size:12px;letter-spacing:1.3px;font-weight:700;opacity:.86;text-transform:uppercase}
+h1{margin:16px 0 8px;font-size:30px;line-height:1.15}
+.hero p{margin:0;color:#f4e8f2;line-height:1.6}
+.body{padding:30px 34px}
+.hello{font-size:18px;line-height:1.65}
+.codebox{margin:22px 0;padding:22px;border-radius:20px;background:linear-gradient(135deg,#fff3f0,#f8edff);border:1px solid #ecd8e7;text-align:center}
+.codebox small{display:block;color:#796879;font-weight:700;margin-bottom:8px}
+.code{font-family:Consolas,monospace;font-size:26px;font-weight:800;letter-spacing:1px;color:#7f2457}
+.status{display:inline-block;margin-top:10px;background:#ffe5d8;color:#8a3b28;padding:7px 11px;border-radius:999px;font-weight:700;font-size:12px}
+.info{margin-top:22px;border:1px solid #eee1eb;border-radius:18px;overflow:hidden}
+.row{display:flex;gap:16px;padding:13px 16px;border-bottom:1px solid #f1e7ef}
+.row:last-child{border-bottom:0}
+.row b{width:160px;flex:none;color:#5b4759}
+.row span{color:#2d222e}
+.cta{text-align:center;margin:28px 0}
+.cta a{display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800}
+.notice{margin-top:24px;padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px}
+.footer{padding:22px 34px 28px;background:#2a162d;color:#ddd0df;font-size:12px;line-height:1.7}
+.footer a{color:#ffd3df;text-decoration:none}
+@media(max-width:600px){
+  .hero,.body,.footer{padding-left:22px;padding-right:22px}
+  .row{display:block}
+  .row b{display:block;width:auto;margin-bottom:4px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="hero">
+      <div class="logo">
+        <img src='https://slc.skyfirst.io.vn/assets/sky-first-logo-email.png' alt='Sky First'>
+        <div>
+          <div class="kicker">Sky First Network Digital Learning Center</div>
+          <strong>Trung tâm Học tập Số Sky First Network 🇻🇳</strong>
+        </div>
+      </div>
+      <h1>Xác nhận tiếp nhận yêu cầu cấp tài khoản</h1>
+      <p>Hệ thống đã tiếp nhận hồ sơ của bạn. Vui lòng lưu mã tra cứu bên dưới để theo dõi trạng thái xử lý.</p>
+    </div>
+
+    <div class="body">
+      <div class="hello">
+        Xin chào <b>{{full_name}}</b>,<br>
+        yêu cầu cấp tài khoản SFN của bạn đã được ghi nhận thành công.
+      </div>
+
+      <div class="codebox">
+        <small>MÃ TRA CỨU YÊU CẦU</small>
+        <div class="code">{{request_code}}</div>
+        <div class="status">{{status}}</div>
+      </div>
+
+      <div class="info">
+        <div class="row"><b>Email đăng ký</b><span>{{email}}</span></div>
+        <div class="row"><b>Số điện thoại</b><span>{{phone}}</span></div>
+        <div class="row"><b>Đơn vị học tập</b><span>{{school_name}}</span></div>
+        <div class="row"><b>Lớp / Khóa</b><span>{{class_or_course}}</span></div>
+        <div class="row"><b>Thời gian gửi</b><span>{{submitted_at}}</span></div>
+      </div>
+
+      <div class="cta">
+        <a href="{{lookup_url}}">TRA CỨU YÊU CẦU</a>
+      </div>
+
+      <div class="notice">
+        <b>Lưu ý:</b> email này chỉ xác nhận hệ thống đã tiếp nhận hồ sơ, chưa đồng nghĩa với việc tài khoản đã được cấp.
+        Khi yêu cầu được duyệt, cần bổ sung hoặc bị từ chối, bạn sẽ nhận một email tiếp theo từ
+        <b>slc@skyfirst.io.vn</b>.
+      </div>
+    </div>
+
+    <div class="footer">
+      <b>Trung tâm Học tập Số Sky First Network</b><br>
+      Hỗ trợ: <a href="mailto:support@skyfirst.io.vn">support@skyfirst.io.vn</a><br>
+      Email hệ thống: <a href="mailto:slc@skyfirst.io.vn">slc@skyfirst.io.vn</a><br>
+      Chính sách quyền riêng tư · Bảo mật · Điều khoản sử dụng<br><br>
+      <div style="padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.10);color:#f2e8f3;line-height:1.65">
+        <b>Email này được gửi tự động từ Trung tâm Học tập Số Sky First Network.</b><br>
+        Vui lòng không phản hồi trực tiếp email này. Nếu bạn cần hỗ trợ, vui lòng liên hệ
+        <a href="mailto:support@skyfirst.io.vn"><b>support@skyfirst.io.vn</b></a>.
+      </div><br>
+      © 2026 Sky First Network · Việt Nam 🇻🇳
+    </div>
+  </div>
+</div>
+</body>
+</html>

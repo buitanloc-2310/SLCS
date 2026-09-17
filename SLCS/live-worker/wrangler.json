@@ -1,0 +1,21 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "sfn-slc-live",
+  "main": "index.js",
+  "compatibility_date": "2026-09-14",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sfn-slc-db",
+      "database_id": "6fd6a6c3-aae6-4b11-89e0-8e13a0e27d3c"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "LIVE_ROOM", "class_name": "LiveRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["LiveRoom"] }
+  ]
+}

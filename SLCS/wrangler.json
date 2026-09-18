@@ -20,7 +20,8 @@
     "AI_API_URL": "https://api.openai.com/v1/responses",
     "AI_MODEL": "gpt-5.6-luna",
     "AI_TIMEOUT_MS": "30000",
-    "AI_ENABLE_WEB_SEARCH": "1"
+    "AI_ENABLE_WEB_SEARCH": "1",
+    "BOOTSTRAP_ENABLED": "0"
   },
   "d1_databases": [
     {
@@ -37,10 +38,18 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "name": "LIVE_ROOM", "class_name": "LiveRoom" }
+      {
+        "name": "LIVE_ROOM",
+        "class_name": "LiveRoom"
+      }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["LiveRoom"] }
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "LiveRoom"
+      ]
+    }
   ]
 }

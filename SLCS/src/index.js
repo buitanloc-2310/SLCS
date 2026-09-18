@@ -207,9 +207,12 @@ async function routeApi(request, env, ctx, url) {
 
   if (path === '/api/health') return ok({ service:'Sky First School', status:'available', time:nowIso() });
 
-  if (path === '/api/setup/installer-info' && method === 'GET') return ok({ installer_available:true });
+  if (path === '/api/setup/installer-info' && method === 'GET') return ok({ installer_available:String(env.BOOTSTRAP_ENABLED||'0')==='1' });
 
   if (path === '/api/setup/status' && method === 'GET') {
+    // Production is already provisioned. Bootstrap is opt-in only so a missing/
+    // incorrect D1 binding can never expose a second first-admin workflow.
+    if(String(env.BOOTSTRAP_ENABLED||'0')!=='1') return ok({schema_ready:true,initialized:true,bootstrap_available:false,status:'provisioned'});
     // Bootstrap detection must be conservative: an existing user/admin always
     // means this installation is initialized, even if a newer optional table
     // is temporarily unavailable. Never invite a second bootstrap because a
@@ -229,6 +232,7 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if (path === '/api/setup/install' && method === 'POST') {
+    if(String(env.BOOTSTRAP_ENABLED||'0')!=='1') return bad('Khởi tạo hệ thống đã được khóa trên môi trường này.',403,{code:'BOOTSTRAP_DISABLED'});
     if (!normalizeSetupToken(env.SETUP_TOKEN)) return bad('Hệ thống chưa sẵn sàng để cài đặt. Vui lòng kiểm tra cấu hình quản trị.',500);
     let installBody={}; try{ installBody=await request.clone().json(); }catch{}
     const providedToken=request.headers.get('x-setup-token') ?? installBody?.setup_token ?? '';
@@ -244,6 +248,7 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if (path === '/api/setup/bootstrap' && method === 'POST') {
+    if(String(env.BOOTSTRAP_ENABLED||'0')!=='1') return bad('Khởi tạo quản trị đầu tiên đã được khóa trên môi trường này.',403,{code:'BOOTSTRAP_DISABLED'});
     if (!normalizeSetupToken(env.SETUP_TOKEN)) return bad('Hệ thống chưa sẵn sàng để khởi tạo. Vui lòng kiểm tra cấu hình quản trị.',500);
     let stage='read_body';
     try {

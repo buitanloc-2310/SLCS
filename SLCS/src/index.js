@@ -1258,25 +1258,16 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if(path==='/api/live/health' && method==='GET'){
-    if(env.LIVE_ROOM) return ok({ready:true,transport:'durable-object'});
-    if(env.LIVE_SERVICE){
-      try{
-        const probe=new Request(new URL('/health',request.url),{method:'GET',headers:{'x-slc-internal-probe':'1'}});
-        const response=await env.LIVE_SERVICE.fetch(probe);
-        if(response.ok) return ok({ready:true,transport:'service'});
-      }catch{}
-      return ok({ready:false,message:'Phòng học trực tuyến đang được khởi động. Vui lòng thử lại sau.'});
-    }
-    return ok({ready:false,message:'Phòng học trực tuyến chưa được kết nối với máy chủ lớp học.'});
+    return env.LIVE_ROOM
+      ? ok({ready:true,transport:'durable-object'})
+      : ok({ready:false,message:'Phòng học trực tuyến chưa được kết nối với máy chủ lớp học.'});
   }
 
   const wsMatch=path.match(/^\/api\/live\/([^/]+)\/ws$/);
   if(wsMatch){
     if(env.LIVE_ROOM){
-      const id=env.LIVE_ROOM.idFromName(wsMatch[1]); return env.LIVE_ROOM.get(id).fetch(request);
-    }
-    if(env.LIVE_SERVICE){
-      return env.LIVE_SERVICE.fetch(request);
+      const id=env.LIVE_ROOM.idFromName(wsMatch[1]);
+      return env.LIVE_ROOM.get(id).fetch(request);
     }
     return bad('Phòng học trực tuyến thời gian thực chưa được liên kết. Các chức năng học tập khác vẫn hoạt động bình thường.',503,{code:'LIVE_SIGNALING_NOT_BOUND'});
   }

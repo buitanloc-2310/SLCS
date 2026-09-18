@@ -205,7 +205,19 @@ async function routeApi(request, env, ctx, url) {
   const path = url.pathname;
   const method = request.method;
 
-  if (path === '/api/health') return ok({ service:'Sky First School', status:'available', time:nowIso() });
+  if (path === '/api/health') {
+    const bindings={db:!!env.DB,files:!!env.FILES,assets:!!env.ASSETS,live_room:!!env.LIVE_ROOM};
+    let data='unavailable';
+    if(env.DB){
+      try{await env.DB.prepare(`SELECT 1 FROM users LIMIT 1`).first();data='ready'}catch{data='schema_unavailable'}
+    }
+    return ok({ service:'Sky First School', status:(bindings.db&&data==='ready')?'available':'degraded', data, bindings, time:nowIso() });
+  }
+
+  // API routes that need persistent data should fail with one stable,
+  // human-readable response when the production Worker is missing its D1
+  // binding. Do not fall through to a TypeError such as env.DB.prepare.
+  if(!env.DB) return bad('Dữ liệu hệ thống hiện chưa được kết nối. Vui lòng liên hệ quản trị hệ thống.',503,{code:'DATA_BINDING_UNAVAILABLE'});
 
   if (path === '/api/setup/installer-info' && method === 'GET') return ok({ installer_available:String(env.BOOTSTRAP_ENABLED||'0')==='1' });
 
@@ -1197,8 +1209,12 @@ export async function handleApiRequest(request, env, ctx) {
     // Login is credential-authenticated; me/logout already validate the cookie
     // inside their own handlers, so they are safe to dispatch directly here.
     if (url.pathname === '/api/health' || url.pathname.startsWith('/api/setup/') ||
-        url.pathname === '/api/auth/login' || url.pathname === '/api/auth/me' ||
-        url.pathname === '/api/auth/logout') {
+        url.pathname.startsWith('/api/auth/')) {
+      // Every authentication/public-access endpoint owns its own authentication
+      // rules. Never run a stale user-session preflight before login, account
+      // request, lookup, activation, logout, or /me. This is especially
+      // important after moving an existing deployment from Pages to one Worker:
+      // an old cookie/schema must not be able to break unrelated public forms.
       return secureResponse(await routeApi(request,env,ctx,url),requestId);
     }
 

@@ -263,3 +263,6 @@ html,body{background:linear-gradient(145deg,#e8f3fa,#dcecf7 58%,#e7f4fa) fixed!i
 .meeting-panel-body{overflow-y:auto!important;overflow-x:hidden!important;scrollbar-gutter:stable!important}
 .meeting-panel-body.hidden{display:none!important}
 @media(max-width:900px){.meeting-panel{width:min(400px,calc(100vw - 20px));max-width:none;min-width:0}}
+
+/* P0: screen sharing is never mirrored; mirror applies only to self camera. */
+.meeting-local.screen-sharing video{transform:none!important;}

@@ -1113,13 +1113,13 @@ async function routeApi(request, env, ctx, url) {
     return bad('Phòng học trực tuyến thời gian thực chưa được liên kết. Các chức năng học tập khác vẫn hoạt động bình thường.',503,{code:'LIVE_SIGNALING_NOT_BOUND'});
   }
 
-  return bad('API không tồn tại.',404);
+  return bad(`API không tồn tại: ${method} ${path}`,404,{code:'API_ROUTE_NOT_FOUND',area:'API_ROUTER',method,path});
 }
 
 export async function handleApiRequest(request, env, ctx) {
   const url=new URL(request.url); const requestId=crypto.randomUUID();
   try {
-    if(!url.pathname.startsWith('/api/')) return bad('API không tồn tại.',404);
+    if(!url.pathname.startsWith('/api/')) return secureResponse(bad(`Đường dẫn không thuộc API: ${request.method} ${url.pathname}`,404,{code:'NOT_API_PATH',area:'API_ENTRY',method:request.method,path:url.pathname}),requestId);
     if(request.method==='OPTIONS') return secureResponse(new Response(null,{status:204}),requestId);
 
     // SETUP/HẠ TẦNG PHẢI CHẠY TRƯỚC SESSION PREFLIGHT.

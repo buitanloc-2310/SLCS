@@ -1190,7 +1190,15 @@ export async function handleApiRequest(request, env, ctx) {
     // phiên cũ chưa đầy đủ, getSession() có thể lỗi trước khi /api/setup/bootstrap
     // được xử lý và biến mọi lỗi thành 500 chung chung. Các endpoint setup dùng
     // SETUP_TOKEN riêng nên không phụ thuộc vào session người dùng.
-    if (url.pathname === '/api/health' || url.pathname.startsWith('/api/setup/')) {
+    // Authentication entry points must also run before session preflight.
+    // A browser can retain a stale cookie from an older deployment. Reading that
+    // cookie before /auth/login may fail on an older/incomplete sessions schema
+    // and prevent a perfectly valid login request from ever reaching its route.
+    // Login is credential-authenticated; me/logout already validate the cookie
+    // inside their own handlers, so they are safe to dispatch directly here.
+    if (url.pathname === '/api/health' || url.pathname.startsWith('/api/setup/') ||
+        url.pathname === '/api/auth/login' || url.pathname === '/api/auth/me' ||
+        url.pathname === '/api/auth/logout') {
       return secureResponse(await routeApi(request,env,ctx,url),requestId);
     }
 

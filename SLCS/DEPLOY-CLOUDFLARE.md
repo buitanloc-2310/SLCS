@@ -1,20 +1,6 @@
-## Sky First School VPLUS — VIP PRO
+# Cloudflare Pages deployment — SLC V10 Pages Edition
 
-> **Current platform:** Sky First School VPLUS — Classroom UX + Confidence Camera + Teaching Layer + School Studio + Scale/Resilience.
-
-# Trung tâm Học tập Số Sky First Network — V11 Pages Fresh Rebuild
-
-V11 sử dụng installer D1 mới hoàn toàn theo cơ chế **one statement at a time** dành cho Cloudflare Pages Functions. Không còn dùng installer `DB.exec()` của V10.x.
-
-- Public website + SFN account
-- Account request / tracking / activation email
-- Classes, materials, assignments, exams, support
-- Admin Control Center
-- D1 metadata + R2 files
-- Giới hạn tối đa 10.000 tài khoản SFN
-- Cài schema trực tiếp từ website bằng `SETUP_TOKEN`
-
-## Deploy Pages
+## Màn Build configuration
 
 ```text
 Framework preset: None
@@ -23,10 +9,19 @@ Build output directory: public
 Root directory: SFN-SLC-VIPPRO
 ```
 
-Sau deploy, kiểm tra `/api/health` và `/api/setup/installer-info` trước khi bấm cài dữ liệu.
+Bản Pages Edition có thư mục `/functions`, vì vậy Cloudflare sẽ tự deploy Pages Functions cùng site public.
 
-Xem `V11-FRESH-REBUILD.md` để biết cơ chế installer mới.
+## Sau khi deploy
 
+1. Kiểm tra `/api/health` phải trả JSON.
+2. Kiểm tra `/api/setup/status`.
+3. Đặt secret `SETUP_TOKEN`.
+4. Đặt `RESEND_API_KEY` nếu dùng email.
+5. Mở website và chạy khởi tạo lần đầu.
+
+D1 và R2 đã được khai báo trong `wrangler.json` với binding `DB` và `FILES`.
+
+Riêng realtime WebSocket cần Durable Object external binding theo giới hạn của Cloudflare Pages.
 
 
 ## V12 — Cloudflare Realtime SFU `skyfirsthoc`

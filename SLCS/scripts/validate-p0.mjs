@@ -4,6 +4,7 @@ const app=read('public/app.js'), cls=read('public/classroom/classroom-plus.js'),
 const checks=[
  ['stable external join landing',app.includes('/join.html?class=')&&fs.existsSync('public/join.html')],
  ['fresh token after prejoin',app.indexOf('await runClassroomPrejoin')<app.indexOf("access=guestName")],
+ ['realtime service binding',wr.services?.some(x=>x.binding==='LIVE_SERVICE'&&x.service==='sfn-slc-live')],
  ['live worker deploy script',!!pkg.scripts?.['deploy:live']],
  ['websocket error visible',!app.includes('ws.onerror=()=>{}')&&app.includes('Kết nối thời gian thực gặp gián đoạn')],
  ['reconnect refreshes access',app.includes('async function refreshLiveAccess')],

@@ -10,9 +10,9 @@ const groups={}; for(const f of mig){const n=f.slice(0,4);(groups[n]??=[]).push(
 for(const [n,files] of Object.entries(groups)) if(files.length>1 && n!=='0007') fail.push(`Migration prefix trùng mới ${n}: ${files.join(', ')}`);
 if((groups['0007']||[]).length!==3) fail.push('Legacy 0007 migration set đã bị thay đổi; cần migration compatibility review');
 const root=fs.readdirSync('.').filter(x=>/^(V\d|VPLUS|UPGRADE)/.test(x)); if(root.length) fail.push(`Historical release docs còn ở root: ${root.join(', ')}`);
-const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); const major=Number(String(pkg.version).split('.')[0]||0); if(major<22) fail.push('Package architecture version phải từ 22 trở lên');
+const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); if(!String(pkg.version).includes('p2')) fail.push('Package chưa mang P2 release marker');
 if(fail.length){console.error('P2 VALIDATION: FAIL\n- '+fail.join('\n- '));process.exit(1)}
 console.log('P2 VALIDATION: PASS');
 console.log(`- ${mig.length} migrations audited; legacy 0007 set frozen`);
 console.log('- legacy classroom/SFU frontend modules removed');
-console.log('- generated release/status history removed from production source');
+console.log('- release documentation archived under docs/releases');

@@ -12,7 +12,6 @@ const MAX_ACCOUNTS = 10000;
 function json(data, status = 200, extra = {}) { return new Response(JSON.stringify(data), { status, headers: { ...JSON_HEADERS, ...extra } }); }
 function bad(message, status = 400, detail = undefined) { return json({ ok: false, message, detail }, status); }
 function ok(data = {}) { return json({ ok: true, ...data }); }
-async function atStage(stage, fn){try{return await fn()}catch(e){e.operationStage=e.operationStage||stage;throw e}}
 function secureResponse(r,requestId=''){if(!r||r.status===101)return r;const h=new Headers(r.headers);for(const [k,v] of Object.entries(SECURITY_HEADERS))if(!h.has(k))h.set(k,v);if(requestId)h.set('x-request-id',requestId);return new Response(r.body,{status:r.status,statusText:r.statusText,headers:h});}
 function nowIso() { return new Date().toISOString(); }
 function randomToken(bytes = 32) { const a = new Uint8Array(bytes); crypto.getRandomValues(a); return [...a].map(x => x.toString(16).padStart(2,'0')).join(''); }
@@ -31,56 +30,7 @@ async function hashPassword(password, saltHex = null) {
   const saltOut = [...salt].map(x=>x.toString(16).padStart(2,'0')).join('');
   return { hash, salt: saltOut };
 }
-async function hashPasswordIterations(password, saltHex, iterations) {
-  const salt = Uint8Array.from(String(saltHex||'').match(/.{1,2}/g)?.map(x=>parseInt(x,16))||[]);
-  if(!salt.length) return '';
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name:'PBKDF2', salt, iterations, hash:'SHA-256' }, key, 256);
-  return [...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,'0')).join('');
-}
-async function verifyPassword(password, salt, expected) {
-  // Current accounts use 10k. During migration, accept known legacy PBKDF2
-  // work factors and transparently re-hash after a successful login.
-  for(const iterations of [10000,21000,100000,210000]){
-    try{ if((await hashPasswordIterations(password,salt,iterations))===expected) return {ok:true,iterations}; }catch{}
-  }
-  return {ok:false,iterations:null};
-}
-
-
-// Access-core compatibility guard. This is intentionally additive only:
-// it creates missing auth/access tables and columns but never drops, truncates,
-// resets, or rewrites existing production data.
-let accessSchemaPromise=null;
-async function ensureAccessSchema(env){
-  if(!env?.DB) throw Object.assign(new Error('DATA_BINDING_UNAVAILABLE'),{status:503,publicMessage:'Dữ liệu hệ thống hiện chưa được kết nối.'});
-  if(accessSchemaPromise) return accessSchemaPromise;
-  accessSchemaPromise=(async()=>{
-    const create=[
-      `CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, ip_hash TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
-      `CREATE TABLE IF NOT EXISTS account_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, request_code TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, data_json TEXT NOT NULL DEFAULT '{}', portrait_key TEXT NOT NULL DEFAULT '', student_card_key TEXT, status TEXT NOT NULL DEFAULT 'pending', reviewed_by TEXT, reviewed_at TEXT, approved_user_id TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
-      `CREATE TABLE IF NOT EXISTS login_throttle (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, window_started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, blocked_until TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
-      `CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner_user_id TEXT, r2_key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0, visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
-      `CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`
-    ];
-    for(const sql of create) await env.DB.prepare(sql).run();
-    const required={
-      users:{phone:"TEXT NOT NULL DEFAULT ''",role:"TEXT NOT NULL DEFAULT 'student'",status:"TEXT NOT NULL DEFAULT 'active'",avatar_key:'TEXT',profile_json:"TEXT NOT NULL DEFAULT '{}'",password_hash:"TEXT NOT NULL DEFAULT ''",password_salt:"TEXT NOT NULL DEFAULT ''",updated_at:'TEXT'},
-      sessions:{ip_hash:"TEXT NOT NULL DEFAULT ''",user_agent:"TEXT NOT NULL DEFAULT ''",expires_at:'TEXT',created_at:'TEXT'},
-      account_requests:{data_json:"TEXT NOT NULL DEFAULT '{}'",portrait_key:"TEXT NOT NULL DEFAULT ''",student_card_key:'TEXT',status:"TEXT NOT NULL DEFAULT 'pending'",reviewed_by:'TEXT',reviewed_at:'TEXT',approved_user_id:'TEXT',created_at:'TEXT'}
-    };
-    for(const [table,cols] of Object.entries(required)){
-      let rows=[]; try{rows=(await env.DB.prepare(`PRAGMA table_info(${table})`).all()).results||[]}catch{}
-      const have=new Set(rows.map(r=>String(r.name)));
-      for(const [col,type] of Object.entries(cols)) if(!have.has(col)){
-        // SQLite only permits additive ALTER here; no existing values are removed.
-        await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`).run();
-      }
-    }
-    return true;
-  })().catch(e=>{accessSchemaPromise=null;throw e});
-  return accessSchemaPromise;
-}
+async function verifyPassword(password, salt, expected) { return (await hashPassword(password, salt)).hash === expected; }
 
 async function getSession(request, env) {
   const token = cookieParse(request.headers.get('cookie') || '')[COOKIE];
@@ -247,78 +197,23 @@ async function getSettings(env){
   const rows=await env.DB.prepare(`SELECT key,value FROM system_settings ORDER BY key`).all();
   return Object.fromEntries((rows.results||[]).map(x=>[x.key,x.value]));
 }
-async function getSystemSetting(env,key,fallback=''){
-  try{const row=await env.DB.prepare(`SELECT value FROM system_settings WHERE key=?`).bind(key).first();return row?.value??fallback}catch{return fallback}
-}
-
-async function ensureTableColumns(env,table,columns){
-  const rows=(await env.DB.prepare(`PRAGMA table_info(${table})`).all()).results||[];
-  const have=new Set(rows.map(x=>String(x.name)));
-  for(const [name,type] of Object.entries(columns)) if(!have.has(name)) await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`).run();
-}
-async function ensureLoginStorage(env){
-  if(!env?.DB) throw Object.assign(new Error('DATA_BINDING_UNAVAILABLE'),{status:503,code:'DATA_BINDING_UNAVAILABLE'});
-  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, ip_hash TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
-  await ensureTableColumns(env,'sessions',{ip_hash:"TEXT NOT NULL DEFAULT ''",user_agent:"TEXT NOT NULL DEFAULT ''",expires_at:'TEXT',created_at:'TEXT'});
-  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS login_throttle (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, window_started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, blocked_until TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
-  const cols=(await env.DB.prepare(`PRAGMA table_info(users)`).all()).results||[];
-  const have=new Set(cols.map(x=>String(x.name)));
-  const required=['id','sfn_id','full_name','email','role','status','password_hash','password_salt'];
-  const missing=required.filter(x=>!have.has(x));
-  if(missing.length) throw Object.assign(new Error('ACCOUNT_SCHEMA_INCOMPATIBLE'),{status:503,code:'ACCOUNT_SCHEMA_INCOMPATIBLE'});
-}
-async function ensureAccountRequestStorage(env){
-  if(!env?.DB) throw Object.assign(new Error('DATA_BINDING_UNAVAILABLE'),{status:503,code:'DATA_BINDING_UNAVAILABLE'});
-  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS account_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, request_code TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, data_json TEXT NOT NULL DEFAULT '{}', portrait_key TEXT NOT NULL DEFAULT '', student_card_key TEXT, status TEXT NOT NULL DEFAULT 'pending', reviewed_by TEXT, reviewed_at TEXT, approved_user_id TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
-  await ensureTableColumns(env,'account_requests',{data_json:"TEXT NOT NULL DEFAULT '{}'",portrait_key:"TEXT NOT NULL DEFAULT ''",student_card_key:'TEXT',status:"TEXT NOT NULL DEFAULT 'pending'",reviewed_by:'TEXT',reviewed_at:'TEXT',approved_user_id:'TEXT',created_at:'TEXT'});
-  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner_user_id TEXT, r2_key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0, visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
-}
-
 
 async function routeApi(request, env, ctx, url) {
   const path = url.pathname;
   const method = request.method;
 
-  if (path === '/api/health') {
-    const bindings={db:!!env.DB,files:!!env.FILES,assets:!!env.ASSETS,live_room:!!env.LIVE_ROOM};
-    let data='unavailable';
-    if(env.DB){
-      try{await env.DB.prepare(`SELECT 1 FROM users LIMIT 1`).first();data='ready'}catch{data='schema_unavailable'}
-    }
-    return ok({ service:'Sky First School', build:'access-core-2026-09-18-r5-clean-rebuild', status:(bindings.db&&data==='ready')?'available':'degraded', data, bindings, time:nowIso() });
-  }
+  if (path === '/api/health') return ok({ service:'Sky First School', status:'available', time:nowIso() });
 
-  // API routes that need persistent data should fail with one stable,
-  // human-readable response when the production Worker is missing its D1
-  // binding. Do not fall through to a TypeError such as env.DB.prepare.
-  if(!env.DB) return bad('Dữ liệu hệ thống hiện chưa được kết nối. Vui lòng liên hệ quản trị hệ thống.',503,{code:'DATA_BINDING_UNAVAILABLE'});
-
-  if (path === '/api/setup/installer-info' && method === 'GET') return ok({ installer_available:String(env.BOOTSTRAP_ENABLED||'0')==='1' });
+  if (path === '/api/setup/installer-info' && method === 'GET') return ok({ installer_available:true });
 
   if (path === '/api/setup/status' && method === 'GET') {
-    // Production is already provisioned. Bootstrap is opt-in only so a missing/
-    // incorrect D1 binding can never expose a second first-admin workflow.
-    if(String(env.BOOTSTRAP_ENABLED||'0')!=='1') return ok({schema_ready:true,initialized:true,bootstrap_available:false,status:'provisioned'});
-    // Bootstrap detection must be conservative: an existing user/admin always
-    // means this installation is initialized, even if a newer optional table
-    // is temporarily unavailable. Never invite a second bootstrap because a
-    // schema probe failed.
-    if(!env.DB) return ok({schema_ready:false,initialized:true,status:'unavailable'});
-    let userCount=null;
-    try {
-      const row=await env.DB.prepare(`SELECT COUNT(*) n FROM users`).first();
-      userCount=Number(row?.n||0);
-    } catch {}
-    if(userCount !== null && userCount > 0){
-      const ready=await schemaReady(env);
-      return ok({schema_ready:ready,initialized:true,user_count:userCount});
-    }
     const ready=await schemaReady(env);
-    return ok({schema_ready:ready,initialized:false});
+    if(!ready) return ok({schema_ready:false,initialized:false});
+    const row=await env.DB.prepare(`SELECT COUNT(*) n FROM users`).first();
+    return ok({schema_ready:true,initialized:Number(row?.n||0)>0});
   }
 
   if (path === '/api/setup/install' && method === 'POST') {
-    if(String(env.BOOTSTRAP_ENABLED||'0')!=='1') return bad('Khởi tạo hệ thống đã được khóa trên môi trường này.',403,{code:'BOOTSTRAP_DISABLED'});
     if (!normalizeSetupToken(env.SETUP_TOKEN)) return bad('Hệ thống chưa sẵn sàng để cài đặt. Vui lòng kiểm tra cấu hình quản trị.',500);
     let installBody={}; try{ installBody=await request.clone().json(); }catch{}
     const providedToken=request.headers.get('x-setup-token') ?? installBody?.setup_token ?? '';
@@ -334,7 +229,6 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if (path === '/api/setup/bootstrap' && method === 'POST') {
-    if(String(env.BOOTSTRAP_ENABLED||'0')!=='1') return bad('Khởi tạo quản trị đầu tiên đã được khóa trên môi trường này.',403,{code:'BOOTSTRAP_DISABLED'});
     if (!normalizeSetupToken(env.SETUP_TOKEN)) return bad('Hệ thống chưa sẵn sàng để khởi tạo. Vui lòng kiểm tra cấu hình quản trị.',500);
     let stage='read_body';
     try {
@@ -382,10 +276,8 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if (path === '/api/auth/request-account' && method === 'POST') {
-    if(!env.FILES) return bad('Kho tệp xác minh hiện chưa được kết nối. Vui lòng liên hệ quản trị hệ thống.',503,{code:'FILES_BINDING_UNAVAILABLE'});
-    await atStage('prepare_account_request_storage',()=>ensureAccountRequestStorage(env));
     const cfg=await getSettings(env).catch(()=>({})); if(cfg.account_request_enabled==='0') return bad('Cổng yêu cầu cấp tài khoản hiện đang tạm đóng.',503);
-    const form = await atStage('read_multipart_form',()=>request.formData());
+    const form = await request.formData();
     const fullName=str(form.get('full_name')), email=normalizeEmail(str(form.get('email'))), phone=str(form.get('phone'));
     if (!fullName || !email || !phone) return bad('Vui lòng nhập đầy đủ họ tên, email và số điện thoại.');
     if(!validEmail(email)) return bad('Địa chỉ email không hợp lệ.');
@@ -395,11 +287,11 @@ async function routeApi(request, env, ctx, url) {
     if (!(portrait instanceof File) || !portrait.size) return bad('Ảnh chân dung là bắt buộc.');
     const portraitErr=validateUpload(portrait,{maxMb:5,mimes:['image/jpeg','image/png','image/webp'],label:'Ảnh chân dung'}); if(portraitErr)return bad(portraitErr);
     if(studentCard instanceof File && studentCard.size){const docErr=validateUpload(studentCard,{maxMb:10,mimes:['image/jpeg','image/png','image/webp','application/pdf'],label:'Giấy tờ học tập'});if(docErr)return bad(docErr);}
-    const existing=await atStage('check_existing_request',()=>env.DB.prepare(`SELECT request_code,status FROM account_requests WHERE lower(email)=lower(?) AND status IN ('pending','reviewing','needs_info') ORDER BY created_at DESC LIMIT 1`).bind(email).first());
+    const existing=await env.DB.prepare(`SELECT request_code,status FROM account_requests WHERE lower(email)=lower(?) AND status IN ('pending','reviewing','needs_info') ORDER BY created_at DESC LIMIT 1`).bind(email).first();
     if(existing) return bad(`Email này đang có một yêu cầu chưa hoàn tất (${existing.request_code}). Vui lòng tra cứu yêu cầu hiện tại trước khi gửi hồ sơ mới.`,409,{request_code:existing.request_code});
     const requestId = `SLC-ACC-${new Date().toISOString().slice(2,10).replaceAll('-','')}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
-    const portraitMeta = await atStage('upload_portrait_to_files',()=>uploadR2(portrait, env, 'account-requests/portrait'));
-    const studentMeta = studentCard instanceof File && studentCard.size ? await atStage('upload_student_document_to_files',()=>uploadR2(studentCard, env, 'account-requests/student-card')) : null;
+    const portraitMeta = await uploadR2(portrait, env, 'account-requests/portrait');
+    const studentMeta = studentCard instanceof File && studentCard.size ? await uploadR2(studentCard, env, 'account-requests/student-card') : null;
     const data = {
       birth_date:str(form.get('birth_date')), gender:str(form.get('gender')), province:str(form.get('province')),
       education_unit_type:str(form.get('education_unit_type')), education_unit:str(form.get('education_unit')), faculty:str(form.get('faculty')),
@@ -407,8 +299,8 @@ async function routeApi(request, env, ctx, url) {
       sfn_unit:str(form.get('sfn_unit')), sfn_role:str(form.get('sfn_role')), purpose:str(form.get('purpose')), requested_access:str(form.get('requested_access')),
       referral:str(form.get('referral')), notes:str(form.get('notes'))
     };
-    await atStage('save_account_request_to_d1',()=>env.DB.prepare(`INSERT INTO account_requests(request_code,full_name,email,phone,data_json,portrait_key,student_card_key,status,created_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`)
-      .bind(requestId,fullName,email,phone,JSON.stringify(data),portraitMeta.key,studentMeta?.key||null,'pending').run());
+    await env.DB.prepare(`INSERT INTO account_requests(request_code,full_name,email,phone,data_json,portrait_key,student_card_key,status,created_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`)
+      .bind(requestId,fullName,email,phone,JSON.stringify(data),portraitMeta.key,studentMeta?.key||null,'pending').run();
     const fallbackHtml=requestReceivedEmail(env,{fullName,requestCode:requestId,email,phone,data}); const tpl=await resolveEmailTemplate(env,'account_request_received','[Sky First] Xác nhận tiếp nhận yêu cầu cấp tài khoản',fallbackHtml,{full_name:fullName,request_code:requestId,email,phone}); const mail=await sendMail(env,email,tpl.subject,tpl.html);
     return ok({ request_code:requestId, email_sent:mail.sent, message:'Yêu cầu đã được tiếp nhận. Mã tra cứu đã được tạo và sẽ được gửi đến email đăng ký nếu dịch vụ email đang hoạt động.' });
   }
@@ -435,35 +327,18 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if (path === '/api/auth/login' && method === 'POST') {
-    let stage='prepare_login_storage';
-    try{
-      await ensureLoginStorage(env);
-      stage='read_request';
-      const body=await request.json(); const login=str(body.login).slice(0,180); const pw=str(body.password);
-      if(!login||!pw) return bad('Vui lòng nhập tài khoản và mật khẩu.',400,{area:'AUTH_LOGIN',stage:'validate_input',code:'LOGIN_INPUT_MISSING'});
-      stage='check_rate_limit';
-      const ip=request.headers.get('cf-connecting-ip')||''; const throttleKey=await sha256Text(`${normalizeEmail(login)}|${ip}`); const throttle=await checkLoginThrottle(env,throttleKey);
-      if(!throttle.allowed) return bad('Có quá nhiều lần đăng nhập không thành công. Vui lòng thử lại sau.',429,{area:'AUTH_LOGIN',stage,code:'LOGIN_RATE_LIMIT',retry_after:throttle.retry_after});
-      stage='find_user';
-      const u=await env.DB.prepare(`SELECT * FROM users WHERE (lower(email)=lower(?) OR lower(sfn_id)=lower(?)) LIMIT 1`).bind(login,login).first();
-      if(!u) return bad('Không tìm thấy tài khoản với SFN ID hoặc email này.',401,{area:'AUTH_LOGIN',stage,code:'ACCOUNT_NOT_FOUND'});
-      if(u.status!=='active') return bad('Tài khoản hiện không ở trạng thái hoạt động.',403,{area:'AUTH_LOGIN',stage:'check_account_status',code:'ACCOUNT_NOT_ACTIVE',status:u.status||'unknown'});
-      if(!u.password_salt||!u.password_hash) return bad('Tài khoản chưa có dữ liệu mật khẩu hợp lệ. Quản trị viên cần kiểm tra hồ sơ tài khoản.',503,{area:'AUTH_LOGIN',stage:'check_password_record',code:'PASSWORD_RECORD_MISSING'});
-      stage='verify_password';
-      const verified=await verifyPassword(pw,u.password_salt,u.password_hash);
-      if(!verified.ok){const cfg=await getSettings(env).catch(()=>({}));await recordLoginFailure(env,throttleKey,Math.max(5,Math.min(30,Number(cfg.login_rate_limit||10))));return bad('Mật khẩu không chính xác.',401,{area:'AUTH_LOGIN',stage,code:'PASSWORD_INCORRECT'});}
-      stage='clear_rate_limit'; await clearLoginThrottle(env,throttleKey);
-      if(verified.iterations && verified.iterations!==10000){ stage='upgrade_password_hash'; const hp=await hashPassword(pw,u.password_salt); await env.DB.prepare(`UPDATE users SET password_hash=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,u.id).run().catch(()=>{}); }
-      stage='create_session';
-      const token=randomToken(32); const cfg=await getSettings(env).catch(()=>({})); const days=Math.max(1,Math.min(90,Number(cfg.default_session_days||env.SESSION_DAYS||30)));
-      const exp=new Date(Date.now()+days*86400000).toISOString(); const ipHash=ip?await sha256Text(ip):'';
-      await env.DB.prepare(`INSERT INTO sessions(token,user_id,ip_hash,user_agent,expires_at,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(token,u.id,ipHash,(request.headers.get('user-agent')||'').slice(0,500),exp).run();
-      return json({ok:true,user:{sfn_id:u.sfn_id,full_name:u.full_name,role:u.role}},200,{'set-cookie':sessionCookie(token,days)});
-    }catch(e){
-      console.error('AUTH_LOGIN_FAILED',stage,e);
-      const code=String(e?.code||e?.message||'LOGIN_RUNTIME_ERROR').slice(0,80);
-      return bad('Đăng nhập gặp lỗi hệ thống tại bước xử lý được ghi bên dưới.',e?.status||500,{area:'AUTH_LOGIN',stage,code});
-    }
+    const body=await request.json(); const login=str(body.login).slice(0,180); const pw=str(body.password);
+    if(!login||!pw) return bad('Vui lòng nhập tài khoản và mật khẩu.');
+    const ip=request.headers.get('cf-connecting-ip')||''; const throttleKey=await sha256Text(`${normalizeEmail(login)}|${ip}`); const throttle=await checkLoginThrottle(env,throttleKey);
+    if(!throttle.allowed) return bad('Có quá nhiều lần đăng nhập không thành công. Vui lòng thử lại sau.',429,{retry_after:throttle.retry_after});
+    const u=await env.DB.prepare(`SELECT * FROM users WHERE (lower(email)=lower(?) OR lower(sfn_id)=lower(?)) LIMIT 1`).bind(login,login).first();
+    const good=!!u && u.status==='active' && !!u.password_salt && !!u.password_hash && await verifyPassword(pw,u.password_salt,u.password_hash);
+    if(!good){const cfg=await getSettings(env).catch(()=>({}));await recordLoginFailure(env,throttleKey,Math.max(5,Math.min(30,Number(cfg.login_rate_limit||10))));return bad('Thông tin đăng nhập không đúng.',401);}
+    await clearLoginThrottle(env,throttleKey);
+    const token=randomToken(32); const cfg=await getSettings(env).catch(()=>({})); const days=Math.max(1,Math.min(90,Number(cfg.default_session_days||env.SESSION_DAYS||30)));
+    const exp=new Date(Date.now()+days*86400000).toISOString(); const ipHash=ip?await sha256Text(ip):'';
+    await env.DB.prepare(`INSERT INTO sessions(token,user_id,ip_hash,user_agent,expires_at,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(token,u.id,ipHash,(request.headers.get('user-agent')||'').slice(0,500),exp).run();
+    return json({ok:true,user:{sfn_id:u.sfn_id,full_name:u.full_name,role:u.role}},200,{'set-cookie':sessionCookie(token,days)});
   }
 
   if (path === '/api/auth/logout' && method === 'POST') {
@@ -494,8 +369,7 @@ async function routeApi(request, env, ctx, url) {
   if(publicLiveInfo && method==='GET'){
     const cls=await env.DB.prepare(`SELECT id,name,unit,status FROM classes WHERE id=? AND status='active'`).bind(publicLiveInfo[1]).first();
     if(!cls) return bad('Không tìm thấy lớp.',404);
-    const cfg=await getSettings(env).catch(()=>({}));
-    return ok({class:cls,guest_allowed:cfg.allow_guest_live!=='0'});
+    return ok({class:cls});
   }
 
 
@@ -519,7 +393,7 @@ async function routeApi(request, env, ctx, url) {
   }
   if (path === '/api/classes' && method === 'GET') {
     const u=await requireUser(request,env);
-    const rows=await env.DB.prepare(`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND c.status='active' ORDER BY c.updated_at DESC`).bind(u.user_id).all();
+    const rows=await env.DB.prepare(`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' ORDER BY c.updated_at DESC`).bind(u.user_id).all();
     return ok({classes:rows.results});
   }
 
@@ -541,8 +415,7 @@ async function routeApi(request, env, ctx, url) {
     if(!member) return bad('Bạn không thuộc lớp này.',403);
     const cls=await env.DB.prepare(`SELECT c.*,u.full_name owner_name FROM classes c JOIN users u ON u.id=c.owner_user_id WHERE c.id=?`).bind(id).first();
     const members=await env.DB.prepare(`SELECT cm.role,u.sfn_id,u.full_name,u.email FROM class_members cm JOIN users u ON u.id=cm.user_id WHERE cm.class_id=? AND cm.status='active' ORDER BY cm.role,u.full_name`).bind(id).all();
-    const live_session=await env.DB.prepare(`SELECT id,title,status,scheduled_at,started_at,ended_at FROM live_sessions WHERE class_id=? ORDER BY COALESCE(started_at,scheduled_at,created_at) DESC LIMIT 1`).bind(id).first().catch(()=>null);
-    return ok({class:cls,members:members.results,my_role:member.role,live_session:live_session||null});
+    return ok({class:cls,members:members.results,my_role:member.role});
   }
 
   const joinMatch=path.match(/^\/api\/classes\/join$/);
@@ -685,7 +558,7 @@ async function routeApi(request, env, ctx, url) {
     const polls=await env.DB.prepare(`SELECT p.*, (SELECT COUNT(*) FROM live_poll_answers a WHERE a.poll_id=p.id) answer_count FROM live_polls p WHERE p.class_id=? ORDER BY p.created_at DESC LIMIT 20`).bind(classId).all();
     const resources=await env.DB.prepare(`SELECT * FROM live_resources WHERE class_id=? ORDER BY pinned DESC,created_at DESC LIMIT 50`).bind(classId).all();
     let attendance=[];
-    if(['teacher','assistant','school_admin','super_admin'].includes(member.role)) attendance=(await env.DB.prepare(`SELECT * FROM live_attendance WHERE class_id=? ORDER BY joined_at DESC LIMIT 300`).bind(classId).all()).results||[];
+    if(['teacher','assistant'].includes(member.role)) attendance=(await env.DB.prepare(`SELECT * FROM live_attendance WHERE class_id=? ORDER BY joined_at DESC LIMIT 300`).bind(classId).all()).results||[];
     return ok({settings,polls:(polls.results||[]).map(x=>({...x,options:safeJson(x.options_json,[])})),resources:resources.results||[],attendance,my_role:member.role});
   }
   if(v13Live && method==='PATCH'){
@@ -738,13 +611,11 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env); const classId=v13Catchup[1]; if(!['school_admin','super_admin'].includes(u.role))await requireClassMember(env,classId,u.user_id); await ensureV13Schema(env); const mins=Math.max(1,Math.min(30,Number(url.searchParams.get('minutes')||5))); const rows=await env.DB.prepare(`SELECT event_type,actor_name,detail_json,created_at FROM live_room_events WHERE class_id=? AND datetime(created_at)>=datetime('now',?) ORDER BY created_at DESC LIMIT 40`).bind(classId,`-${mins} minutes`).all(); return ok({events:(rows.results||[]).map(x=>({...x,detail:safeJson(x.detail_json,{})}))});
   }
   if(path==='/api/admin/system/live-metrics' && method==='GET'){
-    await requireRole(request,env,['super_admin']); await ensureV13Schema(env); const [a,s,t]=await Promise.all([env.DB.prepare(`SELECT COUNT(DISTINCT class_id) classes,COUNT(*) sessions FROM live_attendance WHERE left_at IS NULL AND datetime(last_seen)>datetime('now','-6 minutes')`).first(),env.DB.prepare(`SELECT COUNT(*) sessions FROM live_sfu_sessions WHERE status='active' AND datetime(last_seen)>datetime('now','-2 minutes')`).first().catch(()=>({sessions:0})),env.DB.prepare(`SELECT COUNT(*) tracks FROM live_sfu_tracks WHERE active=1 AND kind='video'`).first().catch(()=>({tracks:0}))]); return ok({active_classes:Number(a?.classes||0),online_users:Number(a?.sessions||0),media_sessions:Number(s?.sessions||0),publishing_video_tracks:Number(t?.tracks||0)});
+    await requireRole(request,env,['super_admin']); await ensureV13Schema(env); const [a,s,t]=await Promise.all([env.DB.prepare(`SELECT COUNT(DISTINCT class_id) classes,COUNT(*) sessions FROM live_attendance WHERE left_at IS NULL AND datetime(last_seen)>datetime('now','-2 minutes')`).first(),env.DB.prepare(`SELECT COUNT(*) sessions FROM live_sfu_sessions WHERE status='active' AND datetime(last_seen)>datetime('now','-2 minutes')`).first().catch(()=>({sessions:0})),env.DB.prepare(`SELECT COUNT(*) tracks FROM live_sfu_tracks WHERE active=1 AND kind='video'`).first().catch(()=>({tracks:0}))]); return ok({active_classes:Number(a?.classes||0),online_users:Number(a?.sessions||0),media_sessions:Number(s?.sessions||0),publishing_video_tracks:Number(t?.tracks||0)});
   }
 
   if(path==='/api/live/access-token' && method==='POST'){
-    const u=await requireUser(request,env); const b=await request.json(); const classId=str(b.class_id); const m=['school_admin','super_admin'].includes(u.role)?{role:u.role}:await requireClassMember(env,classId,u.user_id); const token=randomToken(28); const exp=new Date(Date.now()+18*60*60*1000).toISOString(); const role=['teacher','assistant','school_admin','super_admin'].includes(m.role)?m.role:'student'; await env.DB.prepare(`INSERT INTO live_access_tokens(token,class_id,user_id,guest_name,role,expires_at,created_at) VALUES(?,?,?,'',?,?,CURRENT_TIMESTAMP)`).bind(token,classId,u.user_id,role,exp).run();
-    if(['teacher','school_admin','super_admin'].includes(role)){try{const active=await env.DB.prepare(`SELECT id FROM live_sessions WHERE class_id=? AND status IN ('live','active') ORDER BY started_at DESC LIMIT 1`).bind(classId).first();if(!active){const cls=await env.DB.prepare(`SELECT name FROM classes WHERE id=?`).bind(classId).first();await env.DB.prepare(`INSERT INTO live_sessions(id,class_id,title,room_code,started_by,status,started_at,created_at) VALUES(?,?,?,?,?,'live',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),classId,`Buổi học · ${cls?.name||'Lớp học'}`,slugCode('LIVE'),u.user_id).run();}}catch{}}
-    return ok({token,expires_at:exp,role});
+    const u=await requireUser(request,env); const b=await request.json(); const classId=str(b.class_id); const m=['school_admin','super_admin'].includes(u.role)?{role:u.role}:await requireClassMember(env,classId,u.user_id); const token=randomToken(28); const exp=new Date(Date.now()+18*60*60*1000).toISOString(); const role=['teacher','assistant','school_admin','super_admin'].includes(m.role)?m.role:'student'; await env.DB.prepare(`INSERT INTO live_access_tokens(token,class_id,user_id,guest_name,role,expires_at,created_at) VALUES(?,?,?,'',?,?,CURRENT_TIMESTAMP)`).bind(token,classId,u.user_id,role,exp).run(); return ok({token,expires_at:exp,role});
   }
   const guestLive=path.match(/^\/api\/public\/live\/([^/]+)\/guest-token$/);
   if(guestLive && method==='POST'){
@@ -866,29 +737,6 @@ async function routeApi(request, env, ctx, url) {
     const admin=await requireRole(request,env,['super_admin','school_admin']); const b=await request.json(); const status=['new','in_progress','waiting_user','resolved','closed'].includes(b.status)?b.status:null; if(!status)return bad('Trạng thái ticket không hợp lệ.'); await env.DB.prepare(`UPDATE support_tickets SET status=?,assigned_to=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(status,admin.user_id,adminTicket[1]).run(); await adminLog(env,admin.user_id,'ticket.status',{ticket_id:adminTicket[1],status}); return ok();
   }
 
-  if(path==='/api/admin/site-assets' && method==='POST'){
-    const admin=await requireRole(request,env,['super_admin']);
-    if(!env.FILES) return bad('Kho tệp giao diện chưa sẵn sàng.',503);
-    const form=await request.formData(); const kind=str(form.get('kind'));
-    if(!['logo','favicon','banner'].includes(kind)) return bad('Loại hình ảnh không hợp lệ.');
-    const file=form.get('file'); if(!(file instanceof File)||!file.size) return bad('Vui lòng chọn hình ảnh.');
-    const allowedMime=new Set(['image/png','image/jpeg','image/webp','image/x-icon','image/vnd.microsoft.icon']);
-    if(!allowedMime.has(String(file.type||'').toLowerCase())) return bad('Chỉ hỗ trợ PNG, JPG, WEBP hoặc ICO.');
-    const limit=kind==='banner'?8*1024*1024:3*1024*1024; if(file.size>limit) return bad(kind==='banner'?'Banner tối đa 8MB.':'Logo/Favicon tối đa 3MB.',413);
-    const meta=await uploadR2(file,env,`site-assets/${kind}`,admin.user_id,'private');
-    const settingKey={logo:'studio_logo_file_id',favicon:'studio_favicon_file_id',banner:'studio_banner_file_id'}[kind];
-    await env.DB.prepare(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(settingKey,meta.id,admin.user_id).run();
-    await adminLog(env,admin.user_id,'site.asset.update',{kind,file_id:meta.id,size:meta.size}); return ok({kind,file_id:meta.id,url:`/api/public/site-assets/${kind}`});
-  }
-
-  const publicSiteAsset=path.match(/^\/api\/public\/site-assets\/(logo|favicon|banner)$/);
-  if(publicSiteAsset && method==='GET'){
-    if(!(await schemaReady(env))||!env.FILES) return bad('Hình ảnh chưa được thiết lập.',404);
-    const settings=await getSettings(env); const settingKey={logo:'studio_logo_file_id',favicon:'studio_favicon_file_id',banner:'studio_banner_file_id'}[publicSiteAsset[1]]; const id=settings[settingKey];
-    if(!id)return bad('Hình ảnh chưa được thiết lập.',404); const f=await env.DB.prepare(`SELECT * FROM files WHERE id=?`).bind(id).first(); if(!f)return bad('Hình ảnh không còn tồn tại.',404); const obj=await env.FILES.get(f.r2_key); if(!obj)return bad('Hình ảnh không còn trong kho.',404);
-    const headers=new Headers(); obj.writeHttpMetadata(headers); headers.set('cache-control','public, max-age=300, stale-while-revalidate=86400'); headers.set('x-content-type-options','nosniff'); return new Response(obj.body,{headers});
-  }
-
   if(path==='/api/admin/settings' && method==='GET'){
     const admin=await requireRole(request,env,['super_admin','school_admin']); const all=await getSettings(env);
     if(admin.role==='super_admin') return ok({settings:all});
@@ -896,7 +744,7 @@ async function routeApi(request, env, ctx, url) {
     return ok({settings:Object.fromEntries(allowed.filter(k=>Object.prototype.hasOwnProperty.call(all,k)).map(k=>[k,all[k]]))});
   }
   if(path==='/api/admin/settings' && method==='PUT'){
-    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const allowed=['live_room_max_participants','ai_enabled','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_status_text','public_learner_title','public_learner_text','public_teacher_title','public_teacher_text','public_safety_title','public_safety_text','public_faq_title','public_cta_title','public_cta_text','public_show_teacher','public_show_safety','public_show_faq','class_show_qr','class_show_share','class_show_sidebar','class_default_tab','live_panel_default','live_video_page_size','studio_page_bg','studio_surface','studio_surface_strong','studio_primary','studio_primary_strong','studio_accent_red','studio_text','studio_radius','studio_compact_header','studio_show_theme_toggle','public_show_criteria','public_criteria_title','public_criteria_text','criteria_1_title','criteria_1_text','criteria_2_title','criteria_2_text','criteria_3_title','criteria_3_text','criteria_4_title','criteria_4_text','criteria_5_title','criteria_5_text','footer_network_title','footer_network_text','footer_ctt_label','footer_ctt_url','footer_tnv_label','footer_tnv_url','footer_game_label','footer_game_url','footer_site_label','footer_site_url','footer_facebook_label','footer_facebook_url','footer_tiktok_label','footer_tiktok_url','footer_instagram_label','footer_instagram_url','footer_hotline_label','footer_hotline_url']; const statements=[];
+    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const allowed=['live_room_max_participants','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_status_text']; const statements=[];
     for(const key of allowed){if(Object.prototype.hasOwnProperty.call(b,key))statements.push(env.DB.prepare(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(key,str(b[key]),admin.user_id));}
     if(statements.length)await env.DB.batch(statements); await adminLog(env,admin.user_id,'settings.update',{keys:statements.length}); return ok({settings:await getSettings(env)});
   }
@@ -1090,12 +938,12 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if(path==='/api/ai/capabilities' && method==='GET'){
-    const u=await requireUser(request,env); const enabled=(await getSystemSetting(env,'ai_enabled','1'))!=='0';
-    return ok({available:enabled&&aiConfigured(env),modes:enabled?['ask','research','create',...(hasPermission(u,'ai.analyze.class')||hasPermission(u,'ai.analyze.school')?['analyze']:[]),...(hasPermission(u,'ai.act.class')?['act']:[])]:[]});
+    const u=await requireUser(request,env);
+    return ok({available:aiConfigured(env),modes:['ask','research','create',...(hasPermission(u,'ai.analyze.class')||hasPermission(u,'ai.analyze.school')?['analyze']:[]),...(hasPermission(u,'ai.act.class')?['act']:[])]});
   }
 
   if(path==='/api/ai/chat' && method==='POST'){
-    const u=await requireUser(request,env); requirePermission(u,'ai.ask'); if((await getSystemSetting(env,'ai_enabled','1'))==='0')return bad('Sky First AI đang được quản trị viên tạm tắt.',503,{code:'AI_DISABLED'}); await ensureVPlusSchema(env); await consumeAiQuota(env,u.user_id);
+    const u=await requireUser(request,env); requirePermission(u,'ai.ask'); await ensureVPlusSchema(env); await consumeAiQuota(env,u.user_id);
     const b=await request.json(); const message=str(b.message).slice(0,8000); const mode=['ask','research','create','analyze','act'].includes(str(b.mode))?str(b.mode):'ask'; const classId=str(b.class_id)||null;
     if(message.length<1)return bad('Vui lòng nhập nội dung bạn muốn hỏi.');
     const safety=moderateAiInput(message); if(!safety.allowed){await auditAi(env,{userId:u.user_id,classId,mode,action:'safety_block',status:'blocked',detail:{category:safety.category}}).catch(()=>{});return bad(safety.message,422,{code:'AI_CONTENT_RESTRICTED'});}
@@ -1257,17 +1105,10 @@ async function routeApi(request, env, ctx, url) {
     return ok({media:true,discussion:true,realtime:!!env.LIVE_ROOM,screen_share:true});
   }
 
-  if(path==='/api/live/health' && method==='GET'){
-    return env.LIVE_ROOM
-      ? ok({ready:true,transport:'durable-object'})
-      : ok({ready:false,message:'Phòng học trực tuyến chưa được kết nối với máy chủ lớp học.'});
-  }
-
   const wsMatch=path.match(/^\/api\/live\/([^/]+)\/ws$/);
   if(wsMatch){
     if(env.LIVE_ROOM){
-      const id=env.LIVE_ROOM.idFromName(wsMatch[1]);
-      return env.LIVE_ROOM.get(id).fetch(request);
+      const id=env.LIVE_ROOM.idFromName(wsMatch[1]); return env.LIVE_ROOM.get(id).fetch(request);
     }
     return bad('Phòng học trực tuyến thời gian thực chưa được liên kết. Các chức năng học tập khác vẫn hoạt động bình thường.',503,{code:'LIVE_SIGNALING_NOT_BOUND'});
   }
@@ -1286,24 +1127,7 @@ export async function handleApiRequest(request, env, ctx) {
     // phiên cũ chưa đầy đủ, getSession() có thể lỗi trước khi /api/setup/bootstrap
     // được xử lý và biến mọi lỗi thành 500 chung chung. Các endpoint setup dùng
     // SETUP_TOKEN riêng nên không phụ thuộc vào session người dùng.
-    // Authentication entry points must also run before session preflight.
-    // A browser can retain a stale cookie from an older deployment. Reading that
-    // cookie before /auth/login may fail on an older/incomplete sessions schema
-    // and prevent a perfectly valid login request from ever reaching its route.
-    // Login is credential-authenticated; me/logout already validate the cookie
-    // inside their own handlers, so they are safe to dispatch directly here.
-    if (url.pathname === '/api/health' || url.pathname.startsWith('/api/setup/') ||
-        url.pathname.startsWith('/api/auth/')) {
-      // IMPORTANT: never run schema DDL as a preflight for public/auth requests.
-      // Production databases are migrated separately. A failed ALTER/CREATE here
-      // used to make login, account request and lookup all fail together before
-      // their actual route handler ran. Each route now performs only the binding/
-      // resource checks it really needs.
-      // Every authentication/public-access endpoint owns its own authentication
-      // rules. Never run a stale user-session preflight before login, account
-      // request, lookup, activation, logout, or /me. This is especially
-      // important after moving an existing deployment from Pages to one Worker:
-      // an old cookie/schema must not be able to break unrelated public forms.
+    if (url.pathname === '/api/health' || url.pathname.startsWith('/api/setup/')) {
       return secureResponse(await routeApi(request,env,ctx,url),requestId);
     }
 
@@ -1316,7 +1140,7 @@ export async function handleApiRequest(request, env, ctx) {
   } catch(e){
     if(e?.message==='AUTH')return secureResponse(bad('Vui lòng đăng nhập tài khoản SFN.',401),requestId);
     if(e?.message==='FORBIDDEN')return secureResponse(bad('Bạn không có quyền thực hiện thao tác này.',403),requestId);
-    console.error(e); if((e?.status||500)>=500&&ctx?.waitUntil){ctx.waitUntil((async()=>{try{await env.DB.prepare(`INSERT INTO system_incidents(id,severity,component,message,detail_json,created_at) VALUES(?,'error','pages-function',?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),String(e?.message||'Lỗi hệ thống').slice(0,500),JSON.stringify({path:url.pathname,request_id:requestId})).run()}catch{}})());} return secureResponse(bad('API gặp lỗi khi xử lý yêu cầu.',e?.status||500,{request_id:requestId,area:'API_RUNTIME',stage:e?.operationStage||url.pathname,code:String(e?.code||e?.message||'UNEXPECTED_ERROR').slice(0,80)}),requestId);
+    console.error(e); if((e?.status||500)>=500&&ctx?.waitUntil){ctx.waitUntil((async()=>{try{await env.DB.prepare(`INSERT INTO system_incidents(id,severity,component,message,detail_json,created_at) VALUES(?,'error','pages-function',?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),String(e?.message||'Lỗi hệ thống').slice(0,500),JSON.stringify({path:url.pathname,request_id:requestId})).run()}catch{}})());} return secureResponse(bad(safeUserMessage(e),e?.status||500,{request_id:requestId}),requestId);
   }
 }
 

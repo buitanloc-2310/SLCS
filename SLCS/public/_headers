@@ -1,11 +1,14 @@
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
-/*.js
-  Cache-Control: public, max-age=300, stale-while-revalidate=86400
+/app.js*
+  Cache-Control: no-store, max-age=0
 
-/*.css
-  Cache-Control: public, max-age=300, stale-while-revalidate=86400
+/styles.css*
+  Cache-Control: no-cache, max-age=0, must-revalidate
 
 /index.html
-  Cache-Control: no-cache
+  Cache-Control: no-store, max-age=0
+
+/
+  Cache-Control: no-store, max-age=0

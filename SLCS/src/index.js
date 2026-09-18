@@ -12,6 +12,7 @@ const MAX_ACCOUNTS = 10000;
 function json(data, status = 200, extra = {}) { return new Response(JSON.stringify(data), { status, headers: { ...JSON_HEADERS, ...extra } }); }
 function bad(message, status = 400, detail = undefined) { return json({ ok: false, message, detail }, status); }
 function ok(data = {}) { return json({ ok: true, ...data }); }
+async function atStage(stage, fn){try{return await fn()}catch(e){e.operationStage=e.operationStage||stage;throw e}}
 function secureResponse(r,requestId=''){if(!r||r.status===101)return r;const h=new Headers(r.headers);for(const [k,v] of Object.entries(SECURITY_HEADERS))if(!h.has(k))h.set(k,v);if(requestId)h.set('x-request-id',requestId);return new Response(r.body,{status:r.status,statusText:r.statusText,headers:h});}
 function nowIso() { return new Date().toISOString(); }
 function randomToken(bytes = 32) { const a = new Uint8Array(bytes); crypto.getRandomValues(a); return [...a].map(x => x.toString(16).padStart(2,'0')).join(''); }
@@ -30,7 +31,21 @@ async function hashPassword(password, saltHex = null) {
   const saltOut = [...salt].map(x=>x.toString(16).padStart(2,'0')).join('');
   return { hash, salt: saltOut };
 }
-async function verifyPassword(password, salt, expected) { return (await hashPassword(password, salt)).hash === expected; }
+async function hashPasswordIterations(password, saltHex, iterations) {
+  const salt = Uint8Array.from(String(saltHex||'').match(/.{1,2}/g)?.map(x=>parseInt(x,16))||[]);
+  if(!salt.length) return '';
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name:'PBKDF2', salt, iterations, hash:'SHA-256' }, key, 256);
+  return [...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+async function verifyPassword(password, salt, expected) {
+  // Current accounts use 10k. During migration, accept known legacy PBKDF2
+  // work factors and transparently re-hash after a successful login.
+  for(const iterations of [10000,21000,100000,210000]){
+    try{ if((await hashPasswordIterations(password,salt,iterations))===expected) return {ok:true,iterations}; }catch{}
+  }
+  return {ok:false,iterations:null};
+}
 
 
 // Access-core compatibility guard. This is intentionally additive only:
@@ -236,6 +251,30 @@ async function getSystemSetting(env,key,fallback=''){
   try{const row=await env.DB.prepare(`SELECT value FROM system_settings WHERE key=?`).bind(key).first();return row?.value??fallback}catch{return fallback}
 }
 
+async function ensureTableColumns(env,table,columns){
+  const rows=(await env.DB.prepare(`PRAGMA table_info(${table})`).all()).results||[];
+  const have=new Set(rows.map(x=>String(x.name)));
+  for(const [name,type] of Object.entries(columns)) if(!have.has(name)) await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`).run();
+}
+async function ensureLoginStorage(env){
+  if(!env?.DB) throw Object.assign(new Error('DATA_BINDING_UNAVAILABLE'),{status:503,code:'DATA_BINDING_UNAVAILABLE'});
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, ip_hash TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
+  await ensureTableColumns(env,'sessions',{ip_hash:"TEXT NOT NULL DEFAULT ''",user_agent:"TEXT NOT NULL DEFAULT ''",expires_at:'TEXT',created_at:'TEXT'});
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS login_throttle (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, window_started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, blocked_until TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
+  const cols=(await env.DB.prepare(`PRAGMA table_info(users)`).all()).results||[];
+  const have=new Set(cols.map(x=>String(x.name)));
+  const required=['id','sfn_id','full_name','email','role','status','password_hash','password_salt'];
+  const missing=required.filter(x=>!have.has(x));
+  if(missing.length) throw Object.assign(new Error('ACCOUNT_SCHEMA_INCOMPATIBLE'),{status:503,code:'ACCOUNT_SCHEMA_INCOMPATIBLE'});
+}
+async function ensureAccountRequestStorage(env){
+  if(!env?.DB) throw Object.assign(new Error('DATA_BINDING_UNAVAILABLE'),{status:503,code:'DATA_BINDING_UNAVAILABLE'});
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS account_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, request_code TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, data_json TEXT NOT NULL DEFAULT '{}', portrait_key TEXT NOT NULL DEFAULT '', student_card_key TEXT, status TEXT NOT NULL DEFAULT 'pending', reviewed_by TEXT, reviewed_at TEXT, approved_user_id TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
+  await ensureTableColumns(env,'account_requests',{data_json:"TEXT NOT NULL DEFAULT '{}'",portrait_key:"TEXT NOT NULL DEFAULT ''",student_card_key:'TEXT',status:"TEXT NOT NULL DEFAULT 'pending'",reviewed_by:'TEXT',reviewed_at:'TEXT',approved_user_id:'TEXT',created_at:'TEXT'});
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner_user_id TEXT, r2_key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0, visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
+}
+
+
 async function routeApi(request, env, ctx, url) {
   const path = url.pathname;
   const method = request.method;
@@ -246,7 +285,7 @@ async function routeApi(request, env, ctx, url) {
     if(env.DB){
       try{await env.DB.prepare(`SELECT 1 FROM users LIMIT 1`).first();data='ready'}catch{data='schema_unavailable'}
     }
-    return ok({ service:'Sky First School', build:'access-core-2026-09-18-r3-no-auth-ddl-preflight', status:(bindings.db&&data==='ready')?'available':'degraded', data, bindings, time:nowIso() });
+    return ok({ service:'Sky First School', build:'access-core-2026-09-18-r5-clean-rebuild', status:(bindings.db&&data==='ready')?'available':'degraded', data, bindings, time:nowIso() });
   }
 
   // API routes that need persistent data should fail with one stable,
@@ -344,8 +383,9 @@ async function routeApi(request, env, ctx, url) {
 
   if (path === '/api/auth/request-account' && method === 'POST') {
     if(!env.FILES) return bad('Kho tệp xác minh hiện chưa được kết nối. Vui lòng liên hệ quản trị hệ thống.',503,{code:'FILES_BINDING_UNAVAILABLE'});
+    await atStage('prepare_account_request_storage',()=>ensureAccountRequestStorage(env));
     const cfg=await getSettings(env).catch(()=>({})); if(cfg.account_request_enabled==='0') return bad('Cổng yêu cầu cấp tài khoản hiện đang tạm đóng.',503);
-    const form = await request.formData();
+    const form = await atStage('read_multipart_form',()=>request.formData());
     const fullName=str(form.get('full_name')), email=normalizeEmail(str(form.get('email'))), phone=str(form.get('phone'));
     if (!fullName || !email || !phone) return bad('Vui lòng nhập đầy đủ họ tên, email và số điện thoại.');
     if(!validEmail(email)) return bad('Địa chỉ email không hợp lệ.');
@@ -355,11 +395,11 @@ async function routeApi(request, env, ctx, url) {
     if (!(portrait instanceof File) || !portrait.size) return bad('Ảnh chân dung là bắt buộc.');
     const portraitErr=validateUpload(portrait,{maxMb:5,mimes:['image/jpeg','image/png','image/webp'],label:'Ảnh chân dung'}); if(portraitErr)return bad(portraitErr);
     if(studentCard instanceof File && studentCard.size){const docErr=validateUpload(studentCard,{maxMb:10,mimes:['image/jpeg','image/png','image/webp','application/pdf'],label:'Giấy tờ học tập'});if(docErr)return bad(docErr);}
-    const existing=await env.DB.prepare(`SELECT request_code,status FROM account_requests WHERE lower(email)=lower(?) AND status IN ('pending','reviewing','needs_info') ORDER BY created_at DESC LIMIT 1`).bind(email).first();
+    const existing=await atStage('check_existing_request',()=>env.DB.prepare(`SELECT request_code,status FROM account_requests WHERE lower(email)=lower(?) AND status IN ('pending','reviewing','needs_info') ORDER BY created_at DESC LIMIT 1`).bind(email).first());
     if(existing) return bad(`Email này đang có một yêu cầu chưa hoàn tất (${existing.request_code}). Vui lòng tra cứu yêu cầu hiện tại trước khi gửi hồ sơ mới.`,409,{request_code:existing.request_code});
     const requestId = `SLC-ACC-${new Date().toISOString().slice(2,10).replaceAll('-','')}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
-    const portraitMeta = await uploadR2(portrait, env, 'account-requests/portrait');
-    const studentMeta = studentCard instanceof File && studentCard.size ? await uploadR2(studentCard, env, 'account-requests/student-card') : null;
+    const portraitMeta = await atStage('upload_portrait_to_files',()=>uploadR2(portrait, env, 'account-requests/portrait'));
+    const studentMeta = studentCard instanceof File && studentCard.size ? await atStage('upload_student_document_to_files',()=>uploadR2(studentCard, env, 'account-requests/student-card')) : null;
     const data = {
       birth_date:str(form.get('birth_date')), gender:str(form.get('gender')), province:str(form.get('province')),
       education_unit_type:str(form.get('education_unit_type')), education_unit:str(form.get('education_unit')), faculty:str(form.get('faculty')),
@@ -367,8 +407,8 @@ async function routeApi(request, env, ctx, url) {
       sfn_unit:str(form.get('sfn_unit')), sfn_role:str(form.get('sfn_role')), purpose:str(form.get('purpose')), requested_access:str(form.get('requested_access')),
       referral:str(form.get('referral')), notes:str(form.get('notes'))
     };
-    await env.DB.prepare(`INSERT INTO account_requests(request_code,full_name,email,phone,data_json,portrait_key,student_card_key,status,created_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`)
-      .bind(requestId,fullName,email,phone,JSON.stringify(data),portraitMeta.key,studentMeta?.key||null,'pending').run();
+    await atStage('save_account_request_to_d1',()=>env.DB.prepare(`INSERT INTO account_requests(request_code,full_name,email,phone,data_json,portrait_key,student_card_key,status,created_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`)
+      .bind(requestId,fullName,email,phone,JSON.stringify(data),portraitMeta.key,studentMeta?.key||null,'pending').run());
     const fallbackHtml=requestReceivedEmail(env,{fullName,requestCode:requestId,email,phone,data}); const tpl=await resolveEmailTemplate(env,'account_request_received','[Sky First] Xác nhận tiếp nhận yêu cầu cấp tài khoản',fallbackHtml,{full_name:fullName,request_code:requestId,email,phone}); const mail=await sendMail(env,email,tpl.subject,tpl.html);
     return ok({ request_code:requestId, email_sent:mail.sent, message:'Yêu cầu đã được tiếp nhận. Mã tra cứu đã được tạo và sẽ được gửi đến email đăng ký nếu dịch vụ email đang hoạt động.' });
   }
@@ -395,18 +435,35 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if (path === '/api/auth/login' && method === 'POST') {
-    const body=await request.json(); const login=str(body.login).slice(0,180); const pw=str(body.password);
-    if(!login||!pw) return bad('Vui lòng nhập tài khoản và mật khẩu.');
-    const ip=request.headers.get('cf-connecting-ip')||''; const throttleKey=await sha256Text(`${normalizeEmail(login)}|${ip}`); const throttle=await checkLoginThrottle(env,throttleKey);
-    if(!throttle.allowed) return bad('Có quá nhiều lần đăng nhập không thành công. Vui lòng thử lại sau.',429,{retry_after:throttle.retry_after});
-    const u=await env.DB.prepare(`SELECT * FROM users WHERE (lower(email)=lower(?) OR lower(sfn_id)=lower(?)) LIMIT 1`).bind(login,login).first();
-    const good=!!u && u.status==='active' && !!u.password_salt && !!u.password_hash && await verifyPassword(pw,u.password_salt,u.password_hash);
-    if(!good){const cfg=await getSettings(env).catch(()=>({}));await recordLoginFailure(env,throttleKey,Math.max(5,Math.min(30,Number(cfg.login_rate_limit||10))));return bad('Thông tin đăng nhập không đúng.',401);}
-    await clearLoginThrottle(env,throttleKey);
-    const token=randomToken(32); const cfg=await getSettings(env).catch(()=>({})); const days=Math.max(1,Math.min(90,Number(cfg.default_session_days||env.SESSION_DAYS||30)));
-    const exp=new Date(Date.now()+days*86400000).toISOString(); const ipHash=ip?await sha256Text(ip):'';
-    await env.DB.prepare(`INSERT INTO sessions(token,user_id,ip_hash,user_agent,expires_at,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(token,u.id,ipHash,(request.headers.get('user-agent')||'').slice(0,500),exp).run();
-    return json({ok:true,user:{sfn_id:u.sfn_id,full_name:u.full_name,role:u.role}},200,{'set-cookie':sessionCookie(token,days)});
+    let stage='prepare_login_storage';
+    try{
+      await ensureLoginStorage(env);
+      stage='read_request';
+      const body=await request.json(); const login=str(body.login).slice(0,180); const pw=str(body.password);
+      if(!login||!pw) return bad('Vui lòng nhập tài khoản và mật khẩu.',400,{area:'AUTH_LOGIN',stage:'validate_input',code:'LOGIN_INPUT_MISSING'});
+      stage='check_rate_limit';
+      const ip=request.headers.get('cf-connecting-ip')||''; const throttleKey=await sha256Text(`${normalizeEmail(login)}|${ip}`); const throttle=await checkLoginThrottle(env,throttleKey);
+      if(!throttle.allowed) return bad('Có quá nhiều lần đăng nhập không thành công. Vui lòng thử lại sau.',429,{area:'AUTH_LOGIN',stage,code:'LOGIN_RATE_LIMIT',retry_after:throttle.retry_after});
+      stage='find_user';
+      const u=await env.DB.prepare(`SELECT * FROM users WHERE (lower(email)=lower(?) OR lower(sfn_id)=lower(?)) LIMIT 1`).bind(login,login).first();
+      if(!u) return bad('Không tìm thấy tài khoản với SFN ID hoặc email này.',401,{area:'AUTH_LOGIN',stage,code:'ACCOUNT_NOT_FOUND'});
+      if(u.status!=='active') return bad('Tài khoản hiện không ở trạng thái hoạt động.',403,{area:'AUTH_LOGIN',stage:'check_account_status',code:'ACCOUNT_NOT_ACTIVE',status:u.status||'unknown'});
+      if(!u.password_salt||!u.password_hash) return bad('Tài khoản chưa có dữ liệu mật khẩu hợp lệ. Quản trị viên cần kiểm tra hồ sơ tài khoản.',503,{area:'AUTH_LOGIN',stage:'check_password_record',code:'PASSWORD_RECORD_MISSING'});
+      stage='verify_password';
+      const verified=await verifyPassword(pw,u.password_salt,u.password_hash);
+      if(!verified.ok){const cfg=await getSettings(env).catch(()=>({}));await recordLoginFailure(env,throttleKey,Math.max(5,Math.min(30,Number(cfg.login_rate_limit||10))));return bad('Mật khẩu không chính xác.',401,{area:'AUTH_LOGIN',stage,code:'PASSWORD_INCORRECT'});}
+      stage='clear_rate_limit'; await clearLoginThrottle(env,throttleKey);
+      if(verified.iterations && verified.iterations!==10000){ stage='upgrade_password_hash'; const hp=await hashPassword(pw,u.password_salt); await env.DB.prepare(`UPDATE users SET password_hash=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,u.id).run().catch(()=>{}); }
+      stage='create_session';
+      const token=randomToken(32); const cfg=await getSettings(env).catch(()=>({})); const days=Math.max(1,Math.min(90,Number(cfg.default_session_days||env.SESSION_DAYS||30)));
+      const exp=new Date(Date.now()+days*86400000).toISOString(); const ipHash=ip?await sha256Text(ip):'';
+      await env.DB.prepare(`INSERT INTO sessions(token,user_id,ip_hash,user_agent,expires_at,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(token,u.id,ipHash,(request.headers.get('user-agent')||'').slice(0,500),exp).run();
+      return json({ok:true,user:{sfn_id:u.sfn_id,full_name:u.full_name,role:u.role}},200,{'set-cookie':sessionCookie(token,days)});
+    }catch(e){
+      console.error('AUTH_LOGIN_FAILED',stage,e);
+      const code=String(e?.code||e?.message||'LOGIN_RUNTIME_ERROR').slice(0,80);
+      return bad('Đăng nhập gặp lỗi hệ thống tại bước xử lý được ghi bên dưới.',e?.status||500,{area:'AUTH_LOGIN',stage,code});
+    }
   }
 
   if (path === '/api/auth/logout' && method === 'POST') {
@@ -1268,7 +1325,7 @@ export async function handleApiRequest(request, env, ctx) {
   } catch(e){
     if(e?.message==='AUTH')return secureResponse(bad('Vui lòng đăng nhập tài khoản SFN.',401),requestId);
     if(e?.message==='FORBIDDEN')return secureResponse(bad('Bạn không có quyền thực hiện thao tác này.',403),requestId);
-    console.error(e); if((e?.status||500)>=500&&ctx?.waitUntil){ctx.waitUntil((async()=>{try{await env.DB.prepare(`INSERT INTO system_incidents(id,severity,component,message,detail_json,created_at) VALUES(?,'error','pages-function',?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),String(e?.message||'Lỗi hệ thống').slice(0,500),JSON.stringify({path:url.pathname,request_id:requestId})).run()}catch{}})());} return secureResponse(bad(safeUserMessage(e),e?.status||500,{request_id:requestId}),requestId);
+    console.error(e); if((e?.status||500)>=500&&ctx?.waitUntil){ctx.waitUntil((async()=>{try{await env.DB.prepare(`INSERT INTO system_incidents(id,severity,component,message,detail_json,created_at) VALUES(?,'error','pages-function',?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),String(e?.message||'Lỗi hệ thống').slice(0,500),JSON.stringify({path:url.pathname,request_id:requestId})).run()}catch{}})());} return secureResponse(bad('API gặp lỗi khi xử lý yêu cầu.',e?.status||500,{request_id:requestId,area:'API_RUNTIME',stage:e?.operationStage||url.pathname,code:String(e?.code||e?.message||'UNEXPECTED_ERROR').slice(0,80)}),requestId);
   }
 }
 

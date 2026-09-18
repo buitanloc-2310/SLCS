@@ -201,6 +201,31 @@ async function getSystemSetting(env,key,fallback=''){
   try{const row=await env.DB.prepare(`SELECT value FROM system_settings WHERE key=?`).bind(key).first();return row?.value??fallback}catch{return fallback}
 }
 
+
+// Access/auth compatibility guard. The production database predates some newer
+// platform modules, so public access routes must not depend on an admin running
+// a full migration first. These statements are additive only: they never drop,
+// truncate, replace, or rewrite existing user data.
+let accessSchemaPromise=null;
+async function ensureAccessSchema(env){
+  if(accessSchemaPromise) return accessSchemaPromise;
+  accessSchemaPromise=(async()=>{
+    const sql=[
+      `CREATE TABLE IF NOT EXISTS account_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, request_code TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, data_json TEXT NOT NULL DEFAULT '{}', portrait_key TEXT NOT NULL, student_card_key TEXT, status TEXT NOT NULL DEFAULT 'pending', reviewed_by TEXT, reviewed_at TEXT, approved_user_id TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+      `CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, ip_hash TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+      `CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner_user_id TEXT, r2_key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0, visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+      `CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_by TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+      `CREATE TABLE IF NOT EXISTS login_throttle (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, window_started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, blocked_until TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+      `CREATE TABLE IF NOT EXISTS email_logs (id TEXT PRIMARY KEY, to_email TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL, provider_message_id TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+      `CREATE TABLE IF NOT EXISTS email_templates (key TEXT PRIMARY KEY, subject TEXT NOT NULL, body_html TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_by TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`
+    ];
+    for(const q of sql) await env.DB.prepare(q).run();
+    await env.DB.prepare(`INSERT OR IGNORE INTO system_settings(key,value) VALUES('account_request_enabled','1'),('default_session_days','30'),('login_rate_limit','10')`).run();
+    return true;
+  })().catch(e=>{ accessSchemaPromise=null; throw e; });
+  return accessSchemaPromise;
+}
+
 async function routeApi(request, env, ctx, url) {
   const path = url.pathname;
   const method = request.method;
@@ -211,7 +236,7 @@ async function routeApi(request, env, ctx, url) {
     if(env.DB){
       try{await env.DB.prepare(`SELECT 1 FROM users LIMIT 1`).first();data='ready'}catch{data='schema_unavailable'}
     }
-    return ok({ service:'Sky First School', status:(bindings.db&&data==='ready')?'available':'degraded', data, bindings, time:nowIso() });
+    return ok({ service:'Sky First School', build:'access-core-2026-09-18-r1', status:(bindings.db&&data==='ready')?'available':'degraded', data, bindings, time:nowIso() });
   }
 
   // API routes that need persistent data should fail with one stable,
@@ -306,6 +331,8 @@ async function routeApi(request, env, ctx, url) {
       return bad('Không thể khởi tạo quản trị đầu tiên. Vui lòng thử lại hoặc kiểm tra cấu hình quản trị.',500);
     }
   }
+
+  if (path.startsWith('/api/auth/')) await ensureAccessSchema(env);
 
   if (path === '/api/auth/request-account' && method === 'POST') {
     const cfg=await getSettings(env).catch(()=>({})); if(cfg.account_request_enabled==='0') return bad('Cổng yêu cầu cấp tài khoản hiện đang tạm đóng.',503);

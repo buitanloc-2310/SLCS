@@ -51,5 +51,12 @@
         "LiveRoom"
       ]
     }
-  ]
+  ],
+  "routes": [
+    {
+      "pattern": "slc.skyfirst.io.vn",
+      "custom_domain": true
+    }
+  ],
+  "workers_dev": true
 }

@@ -246,7 +246,7 @@ async function routeApi(request, env, ctx, url) {
     if(env.DB){
       try{await env.DB.prepare(`SELECT 1 FROM users LIMIT 1`).first();data='ready'}catch{data='schema_unavailable'}
     }
-    return ok({ service:'Sky First School', build:'access-core-2026-09-18-r2', status:(bindings.db&&data==='ready')?'available':'degraded', data, bindings, time:nowIso() });
+    return ok({ service:'Sky First School', build:'access-core-2026-09-18-r3-no-auth-ddl-preflight', status:(bindings.db&&data==='ready')?'available':'degraded', data, bindings, time:nowIso() });
   }
 
   // API routes that need persistent data should fail with one stable,
@@ -343,6 +343,7 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if (path === '/api/auth/request-account' && method === 'POST') {
+    if(!env.FILES) return bad('Kho tệp xác minh hiện chưa được kết nối. Vui lòng liên hệ quản trị hệ thống.',503,{code:'FILES_BINDING_UNAVAILABLE'});
     const cfg=await getSettings(env).catch(()=>({})); if(cfg.account_request_enabled==='0') return bad('Cổng yêu cầu cấp tài khoản hiện đang tạm đóng.',503);
     const form = await request.formData();
     const fullName=str(form.get('full_name')), email=normalizeEmail(str(form.get('email'))), phone=str(form.get('phone'));
@@ -1245,7 +1246,11 @@ export async function handleApiRequest(request, env, ctx) {
     // inside their own handlers, so they are safe to dispatch directly here.
     if (url.pathname === '/api/health' || url.pathname.startsWith('/api/setup/') ||
         url.pathname.startsWith('/api/auth/')) {
-      if(url.pathname.startsWith('/api/auth/')) await ensureAccessSchema(env);
+      // IMPORTANT: never run schema DDL as a preflight for public/auth requests.
+      // Production databases are migrated separately. A failed ALTER/CREATE here
+      // used to make login, account request and lookup all fail together before
+      // their actual route handler ran. Each route now performs only the binding/
+      // resource checks it really needs.
       // Every authentication/public-access endpoint owns its own authentication
       // rules. Never run a stale user-session preflight before login, account
       // request, lookup, activation, logout, or /me. This is especially

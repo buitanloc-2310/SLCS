@@ -43,6 +43,7 @@ async function api(path,opt={}){
 }
 function esc(s=''){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function roleLabel(r=''){return ({student:'Học viên',assistant:'Trợ giảng',teacher:'Giáo viên',account_admin:'Quản trị tài khoản',school_admin:'Quản trị trường học',super_admin:'Quản trị hệ thống',guest:'Khách'})[String(r)]||'Thành viên'}
+function lastNameInitial(name=''){const parts=String(name||'').trim().split(/\s+/).filter(Boolean);return (parts.at(-1)?.[0]||'T').toUpperCase()}
 function displayInitial(name=''){const parts=String(name).trim().split(/\s+/).filter(Boolean);return (parts.at(-1)?.[0]||'?').toLocaleUpperCase('vi-VN')}
 function avatarMarkup(user,size='md'){const initial=displayInitial(user?.full_name||user?.display_name||user?.guest_name||'');const uid=user?.id||user?.user_id;if(user?.avatar_key&&uid)return `<span class="user-avatar ${size} has-image"><img src="/api/avatar/${encodeURIComponent(uid)}" alt="" loading="lazy"></span>`;return `<span class="user-avatar ${size}" aria-hidden="true">${esc(initial)}</span>`}
 function activeOrg(){return localStorage.getItem('slc_org')||'sky-first'}
@@ -283,7 +284,6 @@ async function liveRoom(classId,guestName=null){
   }
 
   async function renegotiate(id,pc){if(!wsOnline&&!fallbackActive||!pc||pc.signalingState!=='stable')return;try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);await sendRealtime({type:'offer',to:id,sdp:offer})}catch(e){console.warn('[SLC Live] renegotiate',id,e?.name||e)}}
-  const lastNameInitial=name=>{const parts=String(name||'').trim().split(/\s+/).filter(Boolean);return (parts.at(-1)?.[0]||'T').toUpperCase()};
   // Use the shared roleLabel() helper. Do not redeclare it inside liveRoom: a local const here creates a TDZ and crashes Live before initialization.
   async function flushPeerIce(id,pc){const q=pendingPeerIce.get(id)||[];pendingPeerIce.delete(id);for(const c of q){try{await pc.addIceCandidate(c)}catch{}}}
   async function addPeerIce(id,candidate){if(!candidate)return;const pc=await ensurePeer(id,false);if(pc.remoteDescription){try{await pc.addIceCandidate(candidate)}catch{}}else{const q=pendingPeerIce.get(id)||[];q.push(candidate);pendingPeerIce.set(id,q)}}

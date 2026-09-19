@@ -541,4 +541,46 @@ async function loadPublicConfig(){try{const j=await api('/api/public/site-config
 async function loadMe(){try{const j=await api('/api/auth/me',{cacheTtl:5000});state.user=j.user;state.activeExam=j.active_exam||null}catch{state.user=null;state.activeExam=null}}
 async function loadOrganizations(){if(!state.user){state.organizations=[];return}try{const j=await api('/api/organizations/mine',{cacheTtl:10000});state.organizations=j.organizations||[];const saved=localStorage.getItem('slc_org');state.organizationId=state.organizations.some(o=>o.id===saved)?saved:(state.organizations[0]?.id||'sky-first')}catch{state.organizations=[];state.organizationId='sky-first'}}
 async function render(){const h=location.hash.replace(/^#/,'')||'home';if(state.site?.maintenance_mode==='1'&&!state.user&&!['login','privacy','security','terms','support'].includes(h)){app.innerHTML=shell(`<section class="hero"><div class="eyebrow">THÔNG BÁO HỆ THỐNG</div><h1>Trung tâm đang được bảo trì.</h1><p>${esc(state.site.maintenance_message||'Vui lòng quay lại sau.')}</p><button class="btn" data-go="login">Đăng nhập quản trị</button></section>`);bindNav();return;}if(!state.system.initialized && !['privacy','security','terms'].includes(h) && !h.startsWith('activate/')) return setupFirstAdmin();if(!state.user && !['home','login','request','lookup','privacy','security','terms','support'].includes(h) && !h.startsWith('activate/') && !h.startsWith('guest-live/')) await loadMe();if(state.user&&state.activeExam&&!h.startsWith('exam/')&&!['login'].includes(h)){location.hash=`exam/${state.activeExam.attempt_id}`;return;}if(h==='home')return state.user?home():landing();if(h==='login')return login();if(h==='request')return requestAccount();if(h==='lookup')return lookupAccount();if(h==='classes')return state.user?classes():login();if(h==='calendar')return state.user?calendarView():login();if(h==='resources')return state.user?resourcesView():login();if(h==='notifications')return state.user?notificationsView():login();if(h==='support')return state.user?support():policy('support');if(h==='account')return state.user?account():login();if(h==='admin')return state.user?admin():login();if(h==='admin-organizations')return state.user?organizationAdmin():login();if(h.startsWith('school-studio/'))return state.user?schoolStudio(h.split('/')[1]):login();if(h==='privacy'||h==='security'||h==='terms'||h==='support')return policy(h);if(h.startsWith('class/'))return state.user?classView(h.split('/')[1]):login();if(h.startsWith('live/'))return state.user?liveRoom(h.split('/')[1]):login();if(h.startsWith('guest-live/'))return guestLiveEntry(h.split('/')[1]);if(h.startsWith('activate/'))return activate(h.split('/')[1]);if(h.startsWith('exam/'))return state.user?resumeExam(h.split('/')[1]):login();if(h.startsWith('join/')){if(!state.user)return login();const code=decodeURIComponent(h.split('/')[1]);try{const r=await api('/api/classes/join',{method:'POST',body:JSON.stringify({code})});location.hash=`class/${r.class_id}`}catch(e){alert(e.message)}return}landing()}
-window.addEventListener('hashchange',render);await loadSystemStatus();await loadPublicConfig();await loadMe();await loadOrganizations();render();
+window.addEventListener('hashchange',()=>{Promise.resolve(render()).catch(showBootstrapError)});
+function showBootstrapError(error){
+  console.error('[SLC bootstrap]',error);
+  const target=document.querySelector('#app');
+  if(!target)return;
+  target.innerHTML=`<main class="startup-error"><section class="startup-error-card"><div class="eyebrow">TRUNG TÂM HỌC TẬP SỐ</div><h1>Trang chưa thể khởi động hoàn chỉnh.</h1><p>Hệ thống đã tải giao diện nhưng một thành phần đang phản hồi không ổn định. Bạn có thể thử tải lại mà không cần thay đổi dữ liệu hay tài khoản.</p><div class="toolbar"><button class="btn primary" id="startupReload">Tải lại trang</button><a class="btn" href="#support">Trung tâm hỗ trợ</a></div><details><summary>Thông tin hỗ trợ</summary><code>${esc(error?.message||'BOOTSTRAP_ERROR')}</code></details></section></main>`;
+  document.querySelector('#startupReload')?.addEventListener('click',()=>location.reload());
+}
+async function bootstrap(){
+  // Never keep the root empty while network/API initialization is pending.
+  // Render a usable public shell immediately, then hydrate session/config in parallel.
+  try{landing()}catch(error){showBootstrapError(error);return}
+  const bootFetch=(path,cacheTtl=0)=>api(path,{cacheTtl,timeout:6000});
+  try{
+    const [setup,site,me]=await Promise.allSettled([
+      bootFetch('/api/setup/status'),
+      bootFetch('/api/public/site-config',60000),
+      bootFetch('/api/auth/me',5000)
+    ]);
+    if(setup.status==='fulfilled')state.system={initialized:!!setup.value.initialized,schema_ready:setup.value.schema_ready!==false};
+    else state.system={initialized:true,schema_ready:true}; // do not block the public UI on an unavailable setup probe
+    if(site.status==='fulfilled'){
+      state.site=site.value.settings||{};
+      state.siteAnnouncements=site.value.announcements||[];
+    }
+    if(me.status==='fulfilled'){
+      state.user=me.value.user||null;
+      state.activeExam=me.value.active_exam||null;
+    }else{
+      state.user=null;state.activeExam=null;
+    }
+    if(state.user){
+      try{
+        const org=await api('/api/organizations/mine',{cacheTtl:10000,timeout:6000});
+        state.organizations=org.organizations||[];
+        const saved=localStorage.getItem('slc_org');
+        state.organizationId=state.organizations.some(o=>o.id===saved)?saved:(state.organizations[0]?.id||'sky-first');
+      }catch{state.organizations=[];state.organizationId='sky-first'}
+    }else{state.organizations=[]}
+    await render();
+  }catch(error){showBootstrapError(error)}
+}
+bootstrap();

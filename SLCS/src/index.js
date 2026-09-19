@@ -40,7 +40,15 @@ async function getSession(request, env) {
 }
 async function requireUser(req, env) { const u=await getSession(req,env); if(!u) throw Object.assign(new Error('AUTH'),{status:401}); return u; }
 async function requireRole(req, env, roles) { const u=await requireUser(req,env); if(!roles.includes(u.role)) throw Object.assign(new Error('FORBIDDEN'),{status:403}); return u; }
-async function requireOrganizationContext(request,env,u){const requested=str(request.headers.get('x-organization-id')||'sky-first')||'sky-first';if(u.role==='super_admin'){const o=await env.DB.prepare(`SELECT id FROM organizations WHERE id=? AND status='active'`).bind(requested).first().catch(()=>null);return o?.id||'sky-first'}const m=await env.DB.prepare(`SELECT organization_id FROM organization_members WHERE organization_id=? AND user_id=? AND status='active'`).bind(requested,u.user_id).first().catch(()=>null);if(m)return requested;if(requested==='sky-first')return 'sky-first';throw Object.assign(new Error('FORBIDDEN'),{status:403});}
+async function tableHasColumn(env,table,column){try{const r=await env.DB.prepare(`PRAGMA table_info(${table})`).all();return (r.results||[]).some(x=>x.name===column)}catch{return false}}
+async function requireOrganizationContext(request,env,u){
+  const requested=str(request.headers.get('x-organization-id')||'sky-first')||'sky-first';
+  try{
+    if(u.role==='super_admin'){const o=await env.DB.prepare(`SELECT id FROM organizations WHERE id=? AND status='active'`).bind(requested).first();return o?.id||'sky-first'}
+    const m=await env.DB.prepare(`SELECT organization_id FROM organization_members WHERE organization_id=? AND user_id=? AND status='active'`).bind(requested,u.user_id).first();if(m)return requested;
+  }catch{return 'sky-first'}
+  if(requested==='sky-first')return 'sky-first';throw Object.assign(new Error('FORBIDDEN'),{status:403});
+}
 
 async function activeExam(userId, env) { return reconcileActiveExam(userId,env); }
 
@@ -419,20 +427,19 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env); await env.DB.prepare(`DELETE FROM sessions WHERE id=? AND user_id=?`).bind(Number(accountSession[1]),u.user_id).run(); return ok();
   }
   if (path === '/api/classes' && method === 'GET') {
-    const u=await requireUser(request,env), org=await requireOrganizationContext(request,env,u);
-    const rows=await env.DB.prepare(`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? ORDER BY c.updated_at DESC`).bind(u.user_id,org).all();
-    return ok({classes:rows.results,organization_id:org});
+    const u=await requireUser(request,env), org=await requireOrganizationContext(request,env,u), hasOrg=await tableHasColumn(env,'classes','organization_id');
+    const base=`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active'`;
+    const rows=hasOrg?await env.DB.prepare(`${base} AND COALESCE(c.organization_id,'sky-first')=? ORDER BY c.updated_at DESC`).bind(u.user_id,org).all():await env.DB.prepare(`${base} ORDER BY c.updated_at DESC`).bind(u.user_id).all();
+    return ok({classes:rows.results||[],organization_id:hasOrg?org:'sky-first',schema_mode:hasOrg?'organization':'legacy'});
   }
 
   if (path === '/api/classes' && method === 'POST') {
-    const u=await requireRole(request,env,['super_admin','school_admin','teacher']), org=await requireOrganizationContext(request,env,u);
+    const u=await requireRole(request,env,['super_admin','school_admin','teacher']), org=await requireOrganizationContext(request,env,u), hasOrg=await tableHasColumn(env,'classes','organization_id');
     const b=await request.json(); if(!str(b.name)) return bad('Tên lớp không được để trống.');
     const id=crypto.randomUUID(), joinCode=slugCode('SLC');
-    await env.DB.batch([
-      env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,organization_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id,org),
-      env.DB.prepare(`INSERT INTO class_members(class_id,user_id,role,status,joined_at) VALUES(?,?,'teacher','active',CURRENT_TIMESTAMP)`).bind(id,u.user_id)
-    ]);
-    return ok({id,join_code:joinCode,organization_id:org});
+    const insertClass=hasOrg?env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,organization_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id,org):env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id);
+    await env.DB.batch([insertClass,env.DB.prepare(`INSERT INTO class_members(class_id,user_id,role,status,joined_at) VALUES(?,?,'teacher','active',CURRENT_TIMESTAMP)`).bind(id,u.user_id)]);
+    return ok({id,join_code:joinCode,organization_id:hasOrg?org:'sky-first'});
   }
 
   const classMatch=path.match(/^\/api\/classes\/([^/]+)$/);
@@ -1194,7 +1201,7 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u);const rows=await env.DB.prepare(`SELECT ce.* FROM calendar_events ce WHERE ce.organization_id=? ORDER BY ce.starts_at LIMIT 200`).bind(org).all().catch(()=>({results:[]}));return ok({events:rows.results||[],organization_id:org});
   }
   if(path==='/api/resources' && method==='GET'){
-    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u);const rows=await env.DB.prepare(`SELECT m.id,m.class_id,m.title,m.created_at,f.id file_id,f.name,f.mime,f.size,c.name class_name FROM materials m JOIN files f ON f.id=m.file_id JOIN classes c ON c.id=m.class_id JOIN class_members cm ON cm.class_id=m.class_id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id,org).all();return ok({resources:rows.results||[],organization_id:org});
+    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u),hasOrg=await tableHasColumn(env,'classes','organization_id');const base=`SELECT m.id,m.class_id,m.title,m.created_at,f.id file_id,f.name,f.mime,f.size,c.name class_name FROM materials m JOIN files f ON f.id=m.file_id JOIN classes c ON c.id=m.class_id JOIN class_members cm ON cm.class_id=m.class_id WHERE cm.user_id=? AND cm.status='active'`;const rows=hasOrg?await env.DB.prepare(`${base} AND COALESCE(c.organization_id,'sky-first')=? ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id,org).all():await env.DB.prepare(`${base} ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id).all();return ok({resources:rows.results||[],organization_id:hasOrg?org:'sky-first'});
   }
 
   const fileMatch=path.match(/^\/api\/files\/([^/]+)$/);

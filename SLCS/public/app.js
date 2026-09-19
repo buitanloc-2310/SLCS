@@ -284,7 +284,7 @@ async function liveRoom(classId,guestName=null){
 
   async function renegotiate(id,pc){if(!wsOnline&&!fallbackActive||!pc||pc.signalingState!=='stable')return;try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);await sendRealtime({type:'offer',to:id,sdp:offer})}catch(e){console.warn('[SLC Live] renegotiate',id,e?.name||e)}}
   const lastNameInitial=name=>{const parts=String(name||'').trim().split(/\s+/).filter(Boolean);return (parts.at(-1)?.[0]||'T').toUpperCase()};
-  const roleLabel=role=>({guest:'Khách',student:'Học viên',teacher:'Giáo viên',assistant:'Trợ giảng',admin:'Quản trị',super_admin:'Quản trị hệ thống'}[String(role||'').toLowerCase()]||String(role||'Thành viên'));
+  // Use the shared roleLabel() helper. Do not redeclare it inside liveRoom: a local const here creates a TDZ and crashes Live before initialization.
   async function flushPeerIce(id,pc){const q=pendingPeerIce.get(id)||[];pendingPeerIce.delete(id);for(const c of q){try{await pc.addIceCandidate(c)}catch{}}}
   async function addPeerIce(id,candidate){if(!candidate)return;const pc=await ensurePeer(id,false);if(pc.remoteDescription){try{await pc.addIceCandidate(candidate)}catch{}}else{const q=pendingPeerIce.get(id)||[];q.push(candidate);pendingPeerIce.set(id,q)}}
   function removePeer(id){try{peers.get(id)?.close()}catch{};peers.delete(id);peerMeta.delete(id);pendingPeerIce.delete(id);remotePeerStreams.delete(id);document.querySelector(`[data-peer=\"${CSS.escape(id)}\"]`)?.remove();refreshPeople()}

@@ -266,3 +266,39 @@ html,body{background:linear-gradient(145deg,#e8f3fa,#dcecf7 58%,#e7f4fa) fixed!i
 
 /* P0: screen presentation must never inherit self-camera mirroring. */
 .meeting-local video.screen-share-video,.meeting-tile.screen-tile video,.screen-share-video{transform:none!important;}
+\n/* P0 presentation stage: one full, uncropped, unfiltered screen surface. */
+.meeting-stage.has-presentation{
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr)!important;
+  grid-auto-rows:auto!important;
+  align-content:start!important;
+  overflow:auto!important;
+}
+.meeting-stage.has-presentation .screen-tile{
+  grid-column:1/-1!important;
+  width:100%!important;
+  height:min(72vh,760px)!important;
+  min-height:360px!important;
+  max-height:none!important;
+  order:-100!important;
+  background:#050609!important;
+}
+.meeting-stage.has-presentation .screen-tile video,
+.meeting-stage.has-presentation video.screen-share-video{
+  width:100%!important;
+  height:100%!important;
+  object-fit:contain!important;
+  object-position:center center!important;
+  transform:none!important;
+  filter:none!important;
+  clip-path:none!important;
+  border-radius:0!important;
+  background:#050609!important;
+}
+.meeting-stage.has-presentation .meeting-tile:not(.screen-tile){
+  min-height:140px!important;
+  max-height:190px!important;
+}
+@media(max-width:650px){
+  .meeting-stage.has-presentation .screen-tile{height:min(62vh,560px)!important;min-height:240px!important}
+}

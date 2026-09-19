@@ -190,12 +190,24 @@ async function liveRoom(classId,guestName=null){
   const setConnection=()=>{};
   const friendlyMediaError=e=>({NotAllowedError:'Trình duyệt đang chặn quyền. Hãy cho phép camera/micro ở biểu tượng ổ khóa cạnh địa chỉ website.',NotFoundError:'Không tìm thấy thiết bị phù hợp.',NotReadableError:'Thiết bị đang được ứng dụng khác sử dụng.',OverconstrainedError:'Thiết bị không hỗ trợ cấu hình yêu cầu.',SecurityError:'Camera/micro chỉ hoạt động trên HTTPS.'}[e?.name]||e?.message||'Không thể mở thiết bị.');
 
+  function syncPresentationStage(){
+    const stage=$('#stage'), localTile=$('#localTile');
+    if(!stage||!localTile)return;
+    const remoteScreen=[...remoteSfuStreams.values()].some(x=>x?.tile?.classList?.contains('screen-tile'));
+    const presenting=!!screenTrack||remoteScreen;
+    stage.classList.toggle('has-presentation',presenting);
+    stage.dataset.presentation=presenting?'1':'0';
+    localTile.classList.toggle('screen-tile',!!screenTrack);
+    localTile.classList.toggle('local-screen-tile',!!screenTrack);
+  }
+
   function applyConfidenceView(){
     const f=$('#confidenceFilter')?.value||prejoin.effects?.filter||'natural',soft=$('#confidenceSoft')?.checked??!!prejoin.effects?.softLight,blur=$('#confidencePrivacyBlur')?.checked;
     const base={natural:'none',bright:'brightness(1.12) contrast(1.03) saturate(1.05)',warm:'brightness(1.06) sepia(.10) saturate(1.08)',soft:'brightness(1.08) contrast(.96) saturate(.96)',mono:'grayscale(1) contrast(1.05)'}[f]||'none';
-    localVideo.style.filter=`${base}${soft?' brightness(1.10)':''}${blur?' blur(12px)':''}`;
+    localVideo.style.filter=screenTrack?'none':`${base}${soft?' brightness(1.10)':''}${blur?' blur(12px)':''}`;
     localVideo.style.transform=screenTrack?'none':((($('#confidenceMirror')?.checked??prejoin.effects?.mirror)!==false)?'scaleX(-1)':'none');
     localVideo.classList.toggle('screen-share-video',!!screenTrack);
+    syncPresentationStage();
     $('#localTile')?.classList.toggle('self-hidden',!!$('#confidenceHideSelf')?.checked);
   }
 
@@ -207,11 +219,11 @@ async function liveRoom(classId,guestName=null){
       const stream=new MediaStream();
       const tile=document.createElement('article');tile.className='meeting-tile sfu-tile'+(isScreen?' screen-tile':'');tile.dataset.sfuKey=key;
       tile.innerHTML=`<video autoplay playsinline></video><div class="meeting-avatar remote-fallback"><div class="meeting-big-initial">${esc((meta.ownerName||meta.owner_name||'T').slice(0,1).toUpperCase())}</div><strong>${esc(meta.ownerName||meta.owner_name||'Thành viên')}</strong></div><div class="meeting-person-label"><span>${esc(meta.ownerName||meta.owner_name||'Thành viên')}${isScreen?' · đang trình chiếu':''}</span><span class="sfu-chip">●</span></div>`;
-      $('#stage').appendChild(tile);entry={stream,tile};remoteSfuStreams.set(key,entry);
+      $('#stage').appendChild(tile);entry={stream,tile};remoteSfuStreams.set(key,entry);syncPresentationStage();
     }
     entry.stream.addTrack(track);const video=entry.tile.querySelector('video');video.srcObject=entry.stream;if(isScreen){video.classList.add('screen-share-video');video.style.setProperty('transform','none','important');}
     track.onunmute=()=>entry.tile.querySelector('.remote-fallback')?.classList.add('hidden');
-    track.onended=()=>{try{entry.stream.removeTrack(track)}catch{};if(!entry.stream.getTracks().some(t=>t.readyState==='live')){entry.tile.remove();remoteSfuStreams.delete(key)}};
+    track.onended=()=>{try{entry.stream.removeTrack(track)}catch{};if(!entry.stream.getTracks().some(t=>t.readyState==='live')){entry.tile.remove();remoteSfuStreams.delete(key);syncPresentationStage()}};
   }
   async function publishSfu(track,source){
     if(!sfuMode)return null;if(!sfu)throw new Error('Kết nối lớp đang được chuẩn bị. Vui lòng thử lại sau giây lát.');const meta=await sfu.publishTrack(track,source);
@@ -335,7 +347,7 @@ async function liveRoom(classId,guestName=null){
   $('#toggleMic').onclick=async()=>{try{if(!isHost&&!Number(classroomData.settings?.allow_student_mic??1)){setNotice('Giáo viên đang khóa micro của học viên.','warn');return}if(!micTrack||micTrack.readyState!=='live')await openMic($('#micSelect').value);else{micTrack.enabled=!micTrack.enabled;if(sfuMode)await sfu?.setPublishedEnabled('mic',micTrack.enabled);else await syncAllPeers();if(wsOnline)ws.send(JSON.stringify({type:'media-state',source:'mic',enabled:micTrack.enabled}));updateUI()}}catch(e){setNotice(friendlyMediaError(e),'bad')}};
   $('#toggleCam').onclick=async()=>{try{if(!isHost&&!Number(classroomData.settings?.allow_student_camera??1)){setNotice('Giáo viên đang khóa camera của học viên.','warn');return}if(!camTrack||camTrack.readyState!=='live')await openCam($('#camSelect').value);else{camTrack.enabled=!camTrack.enabled;if(sfuMode)await sfu?.setPublishedEnabled('camera',camTrack.enabled);else await syncAllPeers();if(wsOnline)ws.send(JSON.stringify({type:'media-state',source:'camera',enabled:camTrack.enabled}));updateUI()}}catch(e){setNotice(friendlyMediaError(e),'bad')}};
   $('#switchCam').onclick=async()=>{try{currentFacing=currentFacing==='user'?'environment':'user';await openCam('')}catch(e){setNotice(friendlyMediaError(e),'bad')}};
-  $('#shareScreen').onclick=async()=>{if(!isHost&&!Number(classroomData.settings?.allow_student_share??0)){setNotice('Giáo viên chưa cho phép học viên chia sẻ màn hình.','warn');return}if(!hasDisplay){setNotice('Trình duyệt này chưa hỗ trợ chia sẻ màn hình.','warn');return}try{const s=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:15,max:30}},audio:false});screenTrack=s.getVideoTracks()[0];localVideo.srcObject=new MediaStream([screenTrack]);localVideo.classList.add('screen-share-video');localVideo.style.setProperty('transform','none','important');if(sfuMode)screenPublishedMeta=await publishSfu(screenTrack,'screen');else await syncAllPeers();screenTrack.onended=async()=>{if(sfuMode){const meta=screenPublishedMeta;screenPublishedMeta=null;screenTrack=null;await sfu?.unpublish('screen');if(wsOnline&&meta)ws.send(JSON.stringify({type:'media-track-unpublished',...meta,source:'screen'}))}else{screenTrack=null;await syncAllPeers()}localVideo.srcObject=localStream;localVideo.classList.remove('screen-share-video');localVideo.style.removeProperty('transform');applyConfidenceView();updateUI()};updateUI()}catch(e){if(e.name!=='NotAllowedError')setNotice(friendlyMediaError(e),'bad')}};
+  $('#shareScreen').onclick=async()=>{if(!isHost&&!Number(classroomData.settings?.allow_student_share??0)){setNotice('Giáo viên chưa cho phép học viên chia sẻ màn hình.','warn');return}if(!hasDisplay){setNotice('Trình duyệt này chưa hỗ trợ chia sẻ màn hình.','warn');return}try{const s=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:15,max:30}},audio:false});screenTrack=s.getVideoTracks()[0];localVideo.srcObject=new MediaStream([screenTrack]);localVideo.classList.add('screen-share-video');localVideo.style.setProperty('transform','none','important');localVideo.style.setProperty('filter','none','important');syncPresentationStage();if(sfuMode)screenPublishedMeta=await publishSfu(screenTrack,'screen');else await syncAllPeers();screenTrack.onended=async()=>{if(sfuMode){const meta=screenPublishedMeta;screenPublishedMeta=null;screenTrack=null;await sfu?.unpublish('screen');if(wsOnline&&meta)ws.send(JSON.stringify({type:'media-track-unpublished',...meta,source:'screen'}))}else{screenTrack=null;await syncAllPeers()}localVideo.srcObject=localStream;localVideo.classList.remove('screen-share-video');localVideo.style.removeProperty('transform');localVideo.style.removeProperty('filter');syncPresentationStage();applyConfidenceView();updateUI()};updateUI()}catch(e){if(e.name!=='NotAllowedError')setNotice(friendlyMediaError(e),'bad')}};
   $('#micSelect').onchange=async e=>{if(micTrack)try{await openMic(e.target.value)}catch(err){setNotice(friendlyMediaError(err),'bad')}};
   $('#camSelect').onchange=async e=>{if(camTrack)try{await openCam(e.target.value)}catch(err){setNotice(friendlyMediaError(err),'bad')}};
   $('#speakerSelect').onchange=async e=>{if(typeof localVideo.setSinkId==='function')try{await localVideo.setSinkId(e.target.value)}catch{}};

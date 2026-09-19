@@ -42,6 +42,10 @@ async function requireUser(req, env) { const u=await getSession(req,env); if(!u)
 async function requireRole(req, env, roles) { const u=await requireUser(req,env); if(!roles.includes(u.role)) throw Object.assign(new Error('FORBIDDEN'),{status:403}); return u; }
 async function requireOrganizationContext(request,env,u){const requested=str(request.headers.get('x-organization-id')||'sky-first')||'sky-first';if(u.role==='super_admin'){const o=await env.DB.prepare(`SELECT id FROM organizations WHERE id=? AND status='active'`).bind(requested).first().catch(()=>null);return o?.id||'sky-first'}const m=await env.DB.prepare(`SELECT organization_id FROM organization_members WHERE organization_id=? AND user_id=? AND status='active'`).bind(requested,u.user_id).first().catch(()=>null);if(m)return requested;if(requested==='sky-first')return 'sky-first';throw Object.assign(new Error('FORBIDDEN'),{status:403});}
 
+async function classesHaveOrganizationColumn(env){
+  try{await env.DB.prepare(`SELECT organization_id FROM classes LIMIT 0`).all();return true}catch{return false}
+}
+
 async function activeExam(userId, env) { return reconcileActiveExam(userId,env); }
 
 async function uploadR2(file, env, prefix, ownerId=null, visibility='private') {
@@ -419,19 +423,28 @@ async function routeApi(request, env, ctx, url) {
   }
   if (path === '/api/classes' && method === 'GET') {
     const u=await requireUser(request,env), org=await requireOrganizationContext(request,env,u);
-    const rows=await env.DB.prepare(`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? ORDER BY c.updated_at DESC`).bind(u.user_id,org).all();
-    return ok({classes:rows.results,organization_id:org});
+    const scoped=await classesHaveOrganizationColumn(env);
+    // Compatibility path: production databases that have not received the additive
+    // organization_id migration must continue serving their existing Sky First classes.
+    if(!scoped && org!=='sky-first') return ok({classes:[],organization_id:org,migration_pending:true});
+    const sql=scoped
+      ? `SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? ORDER BY c.updated_at DESC`
+      : `SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' ORDER BY c.updated_at DESC`;
+    const stmt=env.DB.prepare(sql);
+    const rows=scoped?await stmt.bind(u.user_id,org).all():await stmt.bind(u.user_id).all();
+    return ok({classes:rows.results||[],organization_id:org,migration_pending:!scoped});
   }
 
   if (path === '/api/classes' && method === 'POST') {
     const u=await requireRole(request,env,['super_admin','school_admin','teacher']), org=await requireOrganizationContext(request,env,u);
     const b=await request.json(); if(!str(b.name)) return bad('Tên lớp không được để trống.');
-    const id=crypto.randomUUID(), joinCode=slugCode('SLC');
-    await env.DB.batch([
-      env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,organization_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id,org),
-      env.DB.prepare(`INSERT INTO class_members(class_id,user_id,role,status,joined_at) VALUES(?,?,'teacher','active',CURRENT_TIMESTAMP)`).bind(id,u.user_id)
-    ]);
-    return ok({id,join_code:joinCode,organization_id:org});
+    const id=crypto.randomUUID(), joinCode=slugCode('SLC'), scoped=await classesHaveOrganizationColumn(env);
+    if(!scoped && org!=='sky-first') return bad('Khu vực tổ chức này đang được hoàn tất thiết lập. Vui lòng thử lại sau.',503);
+    const insertClass=scoped
+      ? env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,organization_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id,org)
+      : env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id);
+    await env.DB.batch([insertClass,env.DB.prepare(`INSERT INTO class_members(class_id,user_id,role,status,joined_at) VALUES(?,?,'teacher','active',CURRENT_TIMESTAMP)`).bind(id,u.user_id)]);
+    return ok({id,join_code:joinCode,organization_id:org,migration_pending:!scoped});
   }
 
   const classMatch=path.match(/^\/api\/classes\/([^/]+)$/);

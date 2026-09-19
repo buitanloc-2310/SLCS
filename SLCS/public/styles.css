@@ -328,28 +328,3 @@ body{background:linear-gradient(180deg,#eef7ff 0,#f8fbff 260px,#f5f8fc 100%);col
 .startup-shell{min-height:100vh;display:grid;place-items:center;padding:28px;background:#eaf6fd;color:#10324a}
 .startup-shell-card{display:flex;align-items:center;gap:18px;width:min(520px,100%);padding:24px 26px;border:1px solid #cfe1ec;border-radius:22px;background:#fff;box-shadow:0 16px 50px rgba(23,70,98,.10)}
 .startup-shell-card img{width:58px;height:58px;object-fit:contain}.startup-shell-card strong{letter-spacing:.04em}.startup-shell-card p{margin:.35rem 0 0;color:#547083}
-
-
-/* ===== 2026-09-19 public first-paint + visual correction ===== */
-/* The legacy public-section rules used a dark purple panel. The product shell is
-   light-sky, so public content must not inherit that old background/border. */
-body{background:#eef8ff!important}
-.main{width:min(1360px,calc(100% - 32px));margin:24px auto!important}
-.public-section{margin-top:22px!important;padding:34px 28px!important;background:#fff!important;border:1px solid #d9e9f5!important;border-radius:24px!important;box-shadow:0 12px 38px rgba(32,88,130,.07)!important;color:#12324b!important}
-.public-section .eyebrow{color:#1769c7!important}
-.public-section h2,.public-section h3{color:#12324b!important}
-.public-section p,.public-section .muted{color:#61788a!important}
-.premium-hero{min-height:0!important;padding:38px 42px!important;border-radius:26px!important;background:#1674c9!important;box-shadow:0 18px 48px rgba(22,94,157,.16)!important}
-.premium-hero h1{font-size:clamp(38px,4.3vw,60px)!important;line-height:1.02!important}
-.hero-brand-panel{background:#246aa5!important;border-color:rgba(255,255,255,.22)!important;backdrop-filter:none!important}
-.hero-brand-panel p{color:#e9f5ff!important}
-.feature-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important}
-.feature-card,.story-card{background:#f8fcff!important;border-color:#dcebf6!important;box-shadow:none!important}
-.quote-panel{background:#f1f8fe!important;border-color:#d8e9f6!important;box-shadow:none!important}
-.quote-panel p{color:#234e70!important}
-.closing-cta{background:#eaf6ff!important;border:1px solid #d3e8f7!important;color:#12324b!important;box-shadow:none!important}
-.closing-cta p{color:#61788a!important}
-.startup-shell{background:#eef8ff!important;min-height:100vh}
-.startup-shell-card{box-shadow:none!important;border-color:#d9e9f5!important}
-@media(max-width:980px){.feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.premium-hero{padding:30px!important}}
-@media(max-width:650px){.main{width:min(100% - 18px,1360px)!important}.public-section{padding:24px 18px!important}.feature-grid{grid-template-columns:1fr!important}.premium-hero{padding:26px 20px!important}.premium-hero h1{font-size:38px!important}}

@@ -78,7 +78,7 @@ function setupFirstAdmin(){
   $('#setupForm').onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.target));if(d.password!==d.confirm_password){$('#msg').innerHTML='<div class="notice bad">Mật khẩu xác nhận không khớp.</div>';return}try{const j=await api('/api/setup/bootstrap',{method:'POST',headers:{'x-setup-token':String(d.setup_token||'').trim()},body:JSON.stringify({setup_token:String(d.setup_token||'').trim(),full_name:d.full_name,email:d.email,phone:d.phone,password:d.password})});$('#msg').innerHTML=`<div class="notice good"><b>Khởi tạo thành công.</b><br>SFN ID quản trị: ${esc(j.sfn_id)}. Từ đây bạn có thể quản lý hệ thống trên website.</div>`;state.system.initialized=true;setTimeout(()=>{location.hash='login'},1000)}catch(x){$('#msg').innerHTML=`<div class="notice bad"><b>${esc(x.message||'Chưa thể hoàn tất khởi tạo. Vui lòng thử lại.')}</b></div>`}}
 }
 
-async function home(){const [cls,cal,noti]=await Promise.all([api('/api/classes',{cacheTtl:5000}),api('/api/calendar').catch(()=>({events:[]})),api('/api/notifications').catch(()=>({notifications:[]}))]);const now=Date.now(),up=(cal.events||[]).filter(x=>new Date(x.starts_at).getTime()>=now).slice(0,4),unread=(noti.notifications||[]).filter(x=>!x.is_read).slice(0,4);app.innerHTML=shell(`<section class="dashboard-head"><div><div class="eyebrow">XIN CHÀO, ${esc(state.user.full_name.split(/\s+/).at(-1)||state.user.full_name)}</div><h1>Hôm nay bạn học gì?</h1><p>Buổi học, việc cần làm và tài nguyên của bạn trong một nơi.</p></div>${avatarMarkup(state.user,'xl')}</section><section class="dashboard-grid"><article class="dash-card next-session"><span class="dash-kicker">BUỔI HỌC TIẾP THEO</span>${up[0]?`<h2>${esc(up[0].title)}</h2><p>${new Date(up[0].starts_at).toLocaleString('vi-VN')}</p><button class="btn primary" data-go="calendar">Xem lịch</button>`:`<h2>Chưa có lịch sắp tới</h2><p class="muted">Lịch học mới sẽ xuất hiện tại đây.</p>`}</article><article class="dash-card"><h3>Lịch hôm nay</h3>${up.slice(0,3).map(x=>`<div class="mini-row"><b>${esc(x.title)}</b><span>${new Date(x.starts_at).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('')||'<p class="muted">Không có sự kiện sắp tới.</p>'}</article><article class="dash-card"><h3>Thông báo mới</h3>${unread.map(x=>`<div class="mini-row"><b>${esc(x.title)}</b><span>${esc(x.body).slice(0,70)}</span></div>`).join('')||'<p class="muted">Bạn đã xem hết thông báo.</p>'}</article><article class="dash-card span2"><h3>Lớp gần đây</h3><div class="class-strip">${cls.classes.slice(0,6).map(c=>`<button class="class-mini" data-class="${c.id}"><b>${esc(c.name)}</b><span>${esc(roleLabel(c.member_role))} · ${c.member_count||0} thành viên</span></button>`).join('')||'<p class="muted">Bạn chưa tham gia lớp nào.</p>'}</div></article></section>`);bindNav();document.querySelectorAll('[data-class]').forEach(b=>b.onclick=()=>location.hash=`class/${b.dataset.class}`)}
+async function home(){const [cls,cal,noti]=await Promise.all([api('/api/classes',{cacheTtl:5000}).catch(e=>{console.warn('[home] Không tải được lớp học:',e);return {classes:[],degraded:true}}),api('/api/calendar').catch(()=>({events:[]})),api('/api/notifications').catch(()=>({notifications:[]}))]);const now=Date.now(),up=(cal.events||[]).filter(x=>new Date(x.starts_at).getTime()>=now).slice(0,4),unread=(noti.notifications||[]).filter(x=>!x.is_read).slice(0,4);app.innerHTML=shell(`<section class="dashboard-head"><div><div class="eyebrow">XIN CHÀO, ${esc(state.user.full_name.split(/\s+/).at(-1)||state.user.full_name)}</div><h1>Hôm nay bạn học gì?</h1><p>Buổi học, việc cần làm và tài nguyên của bạn trong một nơi.</p></div>${avatarMarkup(state.user,'xl')}</section><section class="dashboard-grid"><article class="dash-card next-session"><span class="dash-kicker">BUỔI HỌC TIẾP THEO</span>${up[0]?`<h2>${esc(up[0].title)}</h2><p>${new Date(up[0].starts_at).toLocaleString('vi-VN')}</p><button class="btn primary" data-go="calendar">Xem lịch</button>`:`<h2>Chưa có lịch sắp tới</h2><p class="muted">Lịch học mới sẽ xuất hiện tại đây.</p>`}</article><article class="dash-card"><h3>Lịch hôm nay</h3>${up.slice(0,3).map(x=>`<div class="mini-row"><b>${esc(x.title)}</b><span>${new Date(x.starts_at).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('')||'<p class="muted">Không có sự kiện sắp tới.</p>'}</article><article class="dash-card"><h3>Thông báo mới</h3>${unread.map(x=>`<div class="mini-row"><b>${esc(x.title)}</b><span>${esc(x.body).slice(0,70)}</span></div>`).join('')||'<p class="muted">Bạn đã xem hết thông báo.</p>'}</article><article class="dash-card span2"><h3>Lớp gần đây</h3><div class="class-strip">${cls.classes.slice(0,6).map(c=>`<button class="class-mini" data-class="${c.id}"><b>${esc(c.name)}</b><span>${esc(roleLabel(c.member_role))} · ${c.member_count||0} thành viên</span></button>`).join('')||'<p class="muted">Bạn chưa tham gia lớp nào.</p>'}</div></article></section>`);bindNav();document.querySelectorAll('[data-class]').forEach(b=>b.onclick=()=>location.hash=`class/${b.dataset.class}`)}
 
 async function classes(){const j=await api('/api/classes',{cacheTtl:5000});const canCreate=['super_admin','school_admin','teacher'].includes(state.user.role);app.innerHTML=shell(`<section class="page-head"><div><div class="eyebrow">LỚP HỌC</div><h1>Lớp của tôi</h1><p>${j.classes.length} lớp · Tìm nhanh lớp đang học, sắp học hoặc cần xử lý.</p></div><div class="toolbar"><button class="btn" id="joinOpen">+ Tham gia lớp</button>${canCreate?'<button class="btn primary" id="createBtn">+ Tạo lớp</button>':''}</div></section><div class="class-tools"><input id="classSearch" placeholder="Tìm lớp học…"><select id="classFilter"><option value="all">Tất cả</option><option value="active">Đang học</option></select></div><section class="class-grid" id="classGrid">${j.classes.map(c=>`<article class="class-card" data-search="${esc((c.name+' '+(c.description||'')).toLowerCase())}"><span class="status-dot">Đang học</span><h3>${esc(c.name)}</h3><p>${esc(c.description||'Không gian học tập của lớp.')}</p><div class="class-meta"><span>${esc(roleLabel(c.member_role||'student'))}</span><span>${c.member_count||0} thành viên</span></div><button class="btn primary" data-class="${c.id}">Mở lớp</button></article>`).join('')||'<div class="empty-state">Bạn chưa tham gia lớp nào.</div>'}</section><dialog id="joinDialog" class="slc-dialog"><form method="dialog"><h2>Tham gia lớp</h2><p class="muted">Nhập mã lớp được giáo viên cung cấp.</p><input id="joinCode" placeholder="Mã lớp"><div id="msg"></div><div class="toolbar"><button class="btn" value="cancel">Hủy</button><button class="btn primary" id="joinBtn" value="default">Tham gia</button></div></form></dialog>`);bindNav();$('#joinOpen').onclick=()=>$('#joinDialog').showModal();$('#joinBtn').onclick=async e=>{e.preventDefault();try{const r=await api('/api/classes/join',{method:'POST',body:JSON.stringify({code:$('#joinCode').value})});location.hash=`class/${r.class_id}`}catch(x){$('#msg').innerHTML=`<div class="notice bad">${esc(x.message)}</div>`}};$('#classSearch').oninput=e=>document.querySelectorAll('.class-card').forEach(x=>x.hidden=!x.dataset.search.includes(e.target.value.toLowerCase()));$('#createBtn')?.addEventListener('click',async()=>{const name=prompt('Tên lớp');if(!name)return;const r=await api('/api/classes',{method:'POST',body:JSON.stringify({name,description:'',unit:'Sky First Network'})});location.hash=`class/${r.id}`});document.querySelectorAll('[data-class]').forEach(b=>b.onclick=()=>location.hash=`class/${b.dataset.class}`)}
 
@@ -541,53 +541,46 @@ async function loadPublicConfig(){try{const j=await api('/api/public/site-config
 async function loadMe(){try{const j=await api('/api/auth/me',{cacheTtl:5000});state.user=j.user;state.activeExam=j.active_exam||null}catch{state.user=null;state.activeExam=null}}
 async function loadOrganizations(){if(!state.user){state.organizations=[];return}try{const j=await api('/api/organizations/mine',{cacheTtl:10000});state.organizations=j.organizations||[];const saved=localStorage.getItem('slc_org');state.organizationId=state.organizations.some(o=>o.id===saved)?saved:(state.organizations[0]?.id||'sky-first')}catch{state.organizations=[];state.organizationId='sky-first'}}
 async function render(){const h=location.hash.replace(/^#/,'')||'home';if(state.site?.maintenance_mode==='1'&&!state.user&&!['login','privacy','security','terms','support'].includes(h)){app.innerHTML=shell(`<section class="hero"><div class="eyebrow">THÔNG BÁO HỆ THỐNG</div><h1>Trung tâm đang được bảo trì.</h1><p>${esc(state.site.maintenance_message||'Vui lòng quay lại sau.')}</p><button class="btn" data-go="login">Đăng nhập quản trị</button></section>`);bindNav();return;}if(!state.system.initialized && !['privacy','security','terms'].includes(h) && !h.startsWith('activate/')) return setupFirstAdmin();if(!state.user && !['home','login','request','lookup','privacy','security','terms','support'].includes(h) && !h.startsWith('activate/') && !h.startsWith('guest-live/')) await loadMe();if(state.user&&state.activeExam&&!h.startsWith('exam/')&&!['login'].includes(h)){location.hash=`exam/${state.activeExam.attempt_id}`;return;}if(h==='home')return state.user?home():landing();if(h==='login')return login();if(h==='request')return requestAccount();if(h==='lookup')return lookupAccount();if(h==='classes')return state.user?classes():login();if(h==='calendar')return state.user?calendarView():login();if(h==='resources')return state.user?resourcesView():login();if(h==='notifications')return state.user?notificationsView():login();if(h==='support')return state.user?support():policy('support');if(h==='account')return state.user?account():login();if(h==='admin')return state.user?admin():login();if(h==='admin-organizations')return state.user?organizationAdmin():login();if(h.startsWith('school-studio/'))return state.user?schoolStudio(h.split('/')[1]):login();if(h==='privacy'||h==='security'||h==='terms'||h==='support')return policy(h);if(h.startsWith('class/'))return state.user?classView(h.split('/')[1]):login();if(h.startsWith('live/'))return state.user?liveRoom(h.split('/')[1]):login();if(h.startsWith('guest-live/'))return guestLiveEntry(h.split('/')[1]);if(h.startsWith('activate/'))return activate(h.split('/')[1]);if(h.startsWith('exam/'))return state.user?resumeExam(h.split('/')[1]):login();if(h.startsWith('join/')){if(!state.user)return login();const code=decodeURIComponent(h.split('/')[1]);try{const r=await api('/api/classes/join',{method:'POST',body:JSON.stringify({code})});location.hash=`class/${r.class_id}`}catch(e){alert(e.message)}return}landing()}
-window.addEventListener('hashchange',()=>{Promise.resolve(render()).catch(error=>handleRenderError(error))});
-function isPublicRoute(){const h=location.hash.replace(/^#/,'')||'home';return ['home','login','request','lookup','privacy','security','terms','support'].includes(h)||h.startsWith('activate/')||h.startsWith('guest-live/')}
-function handleRenderError(error){
-  console.error('[SLC render]',error);
-  // Public pages must remain usable even if an optional API probe fails.
-  // Never replace an already rendered public page with a fatal bootstrap card.
-  if(!state.user&&isPublicRoute()){
-    if(!document.querySelector('.shell')){try{landing();return}catch{}}
-    return;
-  }
-  showBootstrapError(error);
-}
+window.addEventListener('hashchange',()=>{Promise.resolve(render()).catch(showBootstrapError)});
 function showBootstrapError(error){
   console.error('[SLC bootstrap]',error);
   const target=document.querySelector('#app');
   if(!target)return;
-  target.innerHTML=`<main class="startup-error"><section class="startup-error-card"><div class="eyebrow">TRUNG TÂM HỌC TẬP SỐ</div><h1>Chưa thể mở khu vực này.</h1><p>Kết nối đến một thành phần của hệ thống đang không ổn định. Bạn có thể tải lại trang; dữ liệu và tài khoản không bị thay đổi.</p><div class="toolbar"><button class="btn primary" id="startupReload">Tải lại trang</button><a class="btn" href="#support">Trung tâm hỗ trợ</a></div><details><summary>Thông tin hỗ trợ</summary><code>${esc(error?.message||'RUNTIME_ERROR')}</code></details></section></main>`;
+  target.innerHTML=`<main class="startup-error"><section class="startup-error-card"><div class="eyebrow">TRUNG TÂM HỌC TẬP SỐ</div><h1>Trang chưa thể khởi động hoàn chỉnh.</h1><p>Hệ thống đã tải giao diện nhưng một thành phần đang phản hồi không ổn định. Bạn có thể thử tải lại mà không cần thay đổi dữ liệu hay tài khoản.</p><div class="toolbar"><button class="btn primary" id="startupReload">Tải lại trang</button><a class="btn" href="#support">Trung tâm hỗ trợ</a></div><details><summary>Thông tin hỗ trợ</summary><code>${esc(error?.message||'BOOTSTRAP_ERROR')}</code></details></section></main>`;
   document.querySelector('#startupReload')?.addEventListener('click',()=>location.reload());
 }
 async function bootstrap(){
-  // First paint is synchronous: no API request is allowed to block the public page.
+  // Never keep the root empty while network/API initialization is pending.
+  // Render a usable public shell immediately, then hydrate session/config in parallel.
   try{landing()}catch(error){showBootstrapError(error);return}
-
-  // Site configuration and setup status are optional hydration. They must never
-  // turn a working public page into an error page.
-  Promise.allSettled([
-    api('/api/setup/status',{timeout:3500}),
-    api('/api/public/site-config',{cacheTtl:60000,timeout:3500})
-  ]).then(([setup,site])=>{
+  const bootFetch=(path,cacheTtl=0)=>api(path,{cacheTtl,timeout:6000});
+  try{
+    const [setup,site,me]=await Promise.allSettled([
+      bootFetch('/api/setup/status'),
+      bootFetch('/api/public/site-config',60000),
+      bootFetch('/api/auth/me',5000)
+    ]);
     if(setup.status==='fulfilled')state.system={initialized:!!setup.value.initialized,schema_ready:setup.value.schema_ready!==false};
-    if(site.status==='fulfilled'){state.site=site.value.settings||{};state.siteAnnouncements=site.value.announcements||[]}
-  }).catch(()=>{});
-
-  // Session detection is the only bootstrap probe that can change the destination.
-  // Failure means "continue as visitor", not "show fatal error".
-  try{
-    const me=await api('/api/auth/me',{cacheTtl:5000,timeout:3500});
-    state.user=me.user||null;state.activeExam=me.active_exam||null;
-  }catch{state.user=null;state.activeExam=null;return}
-
-  if(!state.user)return;
-  try{
-    const org=await api('/api/organizations/mine',{cacheTtl:10000,timeout:3500});
-    state.organizations=org.organizations||[];
-    const saved=localStorage.getItem('slc_org');
-    state.organizationId=state.organizations.some(o=>o.id===saved)?saved:(state.organizations[0]?.id||'sky-first');
-  }catch{state.organizations=[];state.organizationId='sky-first'}
-  try{await render()}catch(error){showBootstrapError(error)}
+    else state.system={initialized:true,schema_ready:true}; // do not block the public UI on an unavailable setup probe
+    if(site.status==='fulfilled'){
+      state.site=site.value.settings||{};
+      state.siteAnnouncements=site.value.announcements||[];
+    }
+    if(me.status==='fulfilled'){
+      state.user=me.value.user||null;
+      state.activeExam=me.value.active_exam||null;
+    }else{
+      state.user=null;state.activeExam=null;
+    }
+    if(state.user){
+      try{
+        const org=await api('/api/organizations/mine',{cacheTtl:10000,timeout:6000});
+        state.organizations=org.organizations||[];
+        const saved=localStorage.getItem('slc_org');
+        state.organizationId=state.organizations.some(o=>o.id===saved)?saved:(state.organizations[0]?.id||'sky-first');
+      }catch{state.organizations=[];state.organizationId='sky-first'}
+    }else{state.organizations=[]}
+    await render();
+  }catch(error){showBootstrapError(error)}
 }
 bootstrap();

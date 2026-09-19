@@ -16,7 +16,7 @@ Bản này được nâng trực tiếp từ `slc-main.zip` do người dùng cu
 - Endpoint `/api/live/capabilities` cho biết trạng thái realtime mà không làm hỏng phòng khi thiếu Durable Object.
 
 ## Lưu ý hạ tầng
-Cloudflare Pages không tự tạo Durable Object trong project Pages. Để media giữa nhiều người hoạt động qua WebRTC signaling, cần bind `LIVE_ROOM` hoặc `LIVE_SERVICE`. Khi chưa bind, phòng vẫn dùng được camera/micro cục bộ và chat HTTPS cho thành viên lớp.
+Cloudflare Pages giữ vai trò deployment chính. WebSocket/Durable Object có thể được dùng khi môi trường có binding; khi không có, source dùng Pages Functions + D1 làm kênh signaling/presence dự phòng. Media quy mô lớp học vẫn ưu tiên Cloudflare Realtime/SFU.
 
 ## Baseline bảo toàn
 PBKDF2 giữ nguyên `iterations: 10000` theo source người dùng cung cấp.

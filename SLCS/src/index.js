@@ -40,6 +40,7 @@ async function getSession(request, env) {
 }
 async function requireUser(req, env) { const u=await getSession(req,env); if(!u) throw Object.assign(new Error('AUTH'),{status:401}); return u; }
 async function requireRole(req, env, roles) { const u=await requireUser(req,env); if(!roles.includes(u.role)) throw Object.assign(new Error('FORBIDDEN'),{status:403}); return u; }
+async function requireOrganizationContext(request,env,u){const requested=str(request.headers.get('x-organization-id')||'sky-first')||'sky-first';if(u.role==='super_admin'){const o=await env.DB.prepare(`SELECT id FROM organizations WHERE id=? AND status='active'`).bind(requested).first().catch(()=>null);return o?.id||'sky-first'}const m=await env.DB.prepare(`SELECT organization_id FROM organization_members WHERE organization_id=? AND user_id=? AND status='active'`).bind(requested,u.user_id).first().catch(()=>null);if(m)return requested;if(requested==='sky-first')return 'sky-first';throw Object.assign(new Error('FORBIDDEN'),{status:403});}
 
 async function activeExam(userId, env) { return reconcileActiveExam(userId,env); }
 
@@ -78,6 +79,31 @@ async function requireLiveAccess(env,classId,token){
   const ownerKey=row.user_id?`user:${row.user_id}`:`guest:${(await sha256Text(clean)).slice(0,24)}`;
   return {...row,owner_key:ownerKey,display_name:str(row.display_name).slice(0,80)||'Guest'};
 }
+
+async function ensureLiveSignalFallbackSchema(env){
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS live_signal_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_id TEXT NOT NULL,
+    sender_key TEXT NOT NULL,
+    sender_name TEXT NOT NULL DEFAULT '',
+    sender_role TEXT NOT NULL DEFAULT 'guest',
+    target_key TEXT,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_live_signal_events_class_id ON live_signal_events(class_id,id)`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS live_signal_presence (
+    class_id TEXT NOT NULL,
+    peer_key TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'guest',
+    last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(class_id,peer_key)
+  )`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_live_signal_presence_seen ON live_signal_presence(class_id,last_seen)`).run();
+}
+
 async function requireOwnedSfuSession(env,sessionId,classId,access){
   await ensureRealtimeSfuSchema(env);
   const row=await env.DB.prepare(`SELECT * FROM live_sfu_sessions WHERE session_id=? AND class_id=? AND owner_key=? AND status='active' LIMIT 1`).bind(sessionId,classId,access.owner_key).first();
@@ -392,20 +418,20 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env); await env.DB.prepare(`DELETE FROM sessions WHERE id=? AND user_id=?`).bind(Number(accountSession[1]),u.user_id).run(); return ok();
   }
   if (path === '/api/classes' && method === 'GET') {
-    const u=await requireUser(request,env);
-    const rows=await env.DB.prepare(`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' ORDER BY c.updated_at DESC`).bind(u.user_id).all();
-    return ok({classes:rows.results});
+    const u=await requireUser(request,env), org=await requireOrganizationContext(request,env,u);
+    const rows=await env.DB.prepare(`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? ORDER BY c.updated_at DESC`).bind(u.user_id,org).all();
+    return ok({classes:rows.results,organization_id:org});
   }
 
   if (path === '/api/classes' && method === 'POST') {
-    const u=await requireRole(request,env,['super_admin','school_admin','teacher']);
+    const u=await requireRole(request,env,['super_admin','school_admin','teacher']), org=await requireOrganizationContext(request,env,u);
     const b=await request.json(); if(!str(b.name)) return bad('Tên lớp không được để trống.');
     const id=crypto.randomUUID(), joinCode=slugCode('SLC');
     await env.DB.batch([
-      env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id),
+      env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,organization_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id,org),
       env.DB.prepare(`INSERT INTO class_members(class_id,user_id,role,status,joined_at) VALUES(?,?,'teacher','active',CURRENT_TIMESTAMP)`).bind(id,u.user_id)
     ]);
-    return ok({id,join_code:joinCode});
+    return ok({id,join_code:joinCode,organization_id:org});
   }
 
   const classMatch=path.match(/^\/api\/classes\/([^/]+)$/);
@@ -620,46 +646,6 @@ async function routeApi(request, env, ctx, url) {
   const guestLive=path.match(/^\/api\/public\/live\/([^/]+)\/guest-token$/);
   if(guestLive && method==='POST'){
     const cfg=await getSettings(env).catch(()=>({})); if(cfg.allow_guest_live==='0')return bad('Phòng học hiện không cho phép khách tham gia.',403); const b=await request.json(); const name=str(b.name).slice(0,80); if(name.length<2)return bad('Vui lòng nhập tên hiển thị.'); const cls=await env.DB.prepare(`SELECT id,name FROM classes WHERE id=? AND status='active'`).bind(guestLive[1]).first(); if(!cls)return bad('Không tìm thấy lớp.',404); const token=randomToken(28); const exp=new Date(Date.now()+14*60*60*1000).toISOString(); await env.DB.prepare(`INSERT INTO live_access_tokens(token,class_id,user_id,guest_name,role,expires_at,created_at) VALUES(?,?,NULL,?,'guest',?,CURRENT_TIMESTAMP)`).bind(token,cls.id,name,exp).run(); return ok({token,expires_at:exp,class:cls});
-  }
-
-  const liveRuntime=path.match(/^\/api\/live\/([^/]+)\/runtime\/(join|poll|send|leave)$/);
-  if(liveRuntime){
-    const classId=liveRuntime[1], action=liveRuntime[2];
-    const body=method==='POST'?await request.json():{};
-    const token=str(body.access_token||url.searchParams.get('token'));
-    const access=await requireLiveAccess(env,classId,token);
-    const peerId=str(body.peer_id||url.searchParams.get('peer_id')).slice(0,100);
-    if(action==='join' && method==='POST'){
-      const id=peerId||crypto.randomUUID();
-      await env.DB.prepare(`INSERT INTO live_runtime_participants(id,class_id,access_token,display_name,role,joined_at,last_seen,left_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,NULL) ON CONFLICT(id) DO UPDATE SET access_token=excluded.access_token,display_name=excluded.display_name,role=excluded.role,last_seen=CURRENT_TIMESTAMP,left_at=NULL,kicked_at=NULL`).bind(id,classId,token,access.display_name,access.role).run();
-      const roster=await env.DB.prepare(`SELECT id,display_name name,role,mic_on,cam_on,screen_on,hand_raised FROM live_runtime_participants WHERE class_id=? AND left_at IS NULL AND kicked_at IS NULL AND datetime(last_seen)>datetime('now','-45 seconds') ORDER BY joined_at`).bind(classId).all();
-      return ok({peer_id:id,roster:roster.results||[],cursor:0});
-    }
-    if(!peerId)return bad('Phiên phòng học không hợp lệ.',400,{code:'LIVE_RUNTIME_PEER_REQUIRED'});
-    const own=await env.DB.prepare(`SELECT id FROM live_runtime_participants WHERE id=? AND class_id=? AND access_token=? AND left_at IS NULL AND kicked_at IS NULL`).bind(peerId,classId,token).first();
-    if(!own)return bad('Phiên phòng học đã hết hiệu lực. Vui lòng vào lại phòng.',401,{code:'LIVE_RUNTIME_SESSION_EXPIRED'});
-    if(action==='poll' && method==='GET'){
-      await env.DB.prepare(`UPDATE live_runtime_participants SET last_seen=CURRENT_TIMESTAMP WHERE id=?`).bind(peerId).run();
-      const after=Math.max(0,Number(url.searchParams.get('after')||0));
-      const [signals,roster]=await Promise.all([
-        env.DB.prepare(`SELECT id,from_peer,type,payload_json FROM live_runtime_signals WHERE class_id=? AND (to_peer=? OR to_peer='*') AND id>? ORDER BY id LIMIT 100`).bind(classId,peerId,after).all(),
-        env.DB.prepare(`SELECT id,display_name name,role,mic_on,cam_on,screen_on,hand_raised FROM live_runtime_participants WHERE class_id=? AND left_at IS NULL AND kicked_at IS NULL AND datetime(last_seen)>datetime('now','-45 seconds') ORDER BY joined_at`).bind(classId).all()
-      ]);
-      const events=(signals.results||[]).map(x=>({id:x.id,from:x.from_peer,...safeJson(x.payload_json,{}),type:x.type}));
-      return ok({events,roster:roster.results||[],cursor:events.at(-1)?.id||after});
-    }
-    if(action==='send' && method==='POST'){
-      const msg=body.message&&typeof body.message==='object'?body.message:{}; const type=str(msg.type).slice(0,50); if(!type)return bad('Sự kiện phòng học không hợp lệ.');
-      const to=str(msg.to||'*').slice(0,100)||'*'; if(!/^[a-z0-9:_-]{1,50}$/i.test(type))return bad('Sự kiện phòng học không được hỗ trợ.',400,{code:'LIVE_RUNTIME_EVENT_UNSUPPORTED'}); if(JSON.stringify(msg).length>24000)return bad('Sự kiện phòng học quá lớn.',413,{code:'LIVE_RUNTIME_EVENT_TOO_LARGE'});
-      const payload={...msg}; delete payload.type; delete payload.to;
-      await env.DB.prepare(`INSERT INTO live_runtime_signals(class_id,from_peer,to_peer,type,payload_json,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(classId,peerId,to,type,JSON.stringify(payload)).run();
-      if(type==='media-state'){const src=str(msg.source); if(src==='mic')await env.DB.prepare(`UPDATE live_runtime_participants SET mic_on=?,last_seen=CURRENT_TIMESTAMP WHERE id=?`).bind(msg.enabled?1:0,peerId).run(); if(src==='camera')await env.DB.prepare(`UPDATE live_runtime_participants SET cam_on=?,last_seen=CURRENT_TIMESTAMP WHERE id=?`).bind(msg.enabled?1:0,peerId).run();}
-      if(type==='raise-hand')await env.DB.prepare(`UPDATE live_runtime_participants SET hand_raised=1,last_seen=CURRENT_TIMESTAMP WHERE id=?`).bind(peerId).run();
-      return ok({sent:true});
-    }
-    if(action==='leave' && method==='POST'){
-      await env.DB.prepare(`UPDATE live_runtime_participants SET left_at=CURRENT_TIMESTAMP,last_seen=CURRENT_TIMESTAMP WHERE id=?`).bind(peerId).run(); return ok({left:true});
-    }
   }
 
   if(path==='/api/live/media/status' && method==='POST'){
@@ -956,7 +942,7 @@ async function routeApi(request, env, ctx, url) {
     const recent=await env.DB.prepare(`SELECT status,COUNT(*) n FROM ai_audit WHERE datetime(created_at)>=datetime('now','-24 hours') GROUP BY status`).all().catch(()=>({results:[]}));
     const last=await env.DB.prepare(`SELECT mode,action,status,detail_json,created_at FROM ai_audit ORDER BY created_at DESC LIMIT 1`).first().catch(()=>null);
     const key=await aiKeyDiagnostic(env);
-    return ok({configured:cfg.configured,provider:cfg.provider,model:cfg.model||null,endpoint:cfg.url?(()=>{try{return new URL(cfg.url).origin}catch{return 'configured'}})():null,native_web_search:cfg.nativeWebSearch,timeout_ms:cfg.timeoutMs,key_present:key.present,key_diagnostic:key,activity_24h:recent.results||[],last:last?{mode:last.mode,action:last.action,status:last.status,created_at:last.created_at}:null});
+    return ok({configured:cfg.configured,provider:cfg.provider,model:cfg.model||null,endpoint:cfg.url?(()=>{try{return new URL(cfg.url).origin}catch{return 'configured'}})():null,native_web_search:cfg.nativeWebSearch,timeout_ms:cfg.timeoutMs,key_present:key.present,activity_24h:recent.results||[],last:last?{mode:last.mode,action:last.action,status:last.status,created_at:last.created_at}:null});
   }
 
   if(path==='/api/admin/ai/test' && method==='POST'){
@@ -965,15 +951,15 @@ async function routeApi(request, env, ctx, url) {
     const auth=await testAiAuthentication(env);
     if(!auth.ok){
       await auditAi(env,{userId:u.user_id,mode:'ask',action:'provider_auth_test',status:'error',detail:{code:auth.code,provider_status:auth.status||null,latency_ms:Date.now()-started}});
-      return bad('Kiểm tra Sky First AI chưa thành công.',503,{code:auth.code,provider_status:auth.status||null,auth:{ok:false,status:auth.status||null,code:auth.code,error_code:auth.error_code||null,me:auth.me?{ok:auth.me.ok,status:auth.me.status,error_code:auth.me.error_code||null}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status,error_code:auth.models.error_code||null}:null},key_diagnostic:auth.key,detail:String(auth.detail||'').slice(0,600),latency_ms:Date.now()-started});
+      return bad('Kiểm tra Sky First AI chưa thành công.',503,{code:auth.code,provider_status:auth.status||null,auth:{ok:false,status:auth.status||null,code:auth.code,error_code:auth.error_code||null,me:auth.me?{ok:auth.me.ok,status:auth.me.status,error_code:auth.me.error_code||null}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status,error_code:auth.models.error_code||null}:null},detail:String(auth.detail||'').slice(0,600),latency_ms:Date.now()-started});
     }
     try{
       const result=await callAiProvider(env,{messages:[{role:'system',content:'Bạn đang thực hiện kiểm tra kết nối nội bộ. Trả lời thật ngắn.'},{role:'user',content:'Trả lời đúng cụm từ: SKY FIRST AI READY'}],maxTokens:48});
       await auditAi(env,{userId:u.user_id,mode:'ask',action:'provider_test',status:'ok',detail:{provider:cfg.provider,model:cfg.model,auth_status:auth.status,latency_ms:Date.now()-started}});
-      return ok({ready:true,latency_ms:Date.now()-started,provider:cfg.provider,model:cfg.model,response:String(result.text).slice(0,160),native_web_search:cfg.nativeWebSearch,key_present:true,auth:{ok:true,status:auth.status,code:auth.code,me:auth.me?{ok:auth.me.ok,status:auth.me.status}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status}:null},key_diagnostic:auth.key,responses:{ok:true}});
+      return ok({ready:true,latency_ms:Date.now()-started,provider:cfg.provider,model:cfg.model,response:String(result.text).slice(0,160),native_web_search:cfg.nativeWebSearch,key_present:true,auth:{ok:true,status:auth.status,code:auth.code,me:auth.me?{ok:auth.me.ok,status:auth.me.status}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status}:null},responses:{ok:true}});
     }catch(e){
       await auditAi(env,{userId:u.user_id,mode:'ask',action:'provider_test',status:'error',detail:{code:String(e?.message||'AI_ERROR'),provider_status:e?.providerStatus||null,auth_status:auth.status,latency_ms:Date.now()-started}});
-      return bad('Kiểm tra Sky First AI chưa thành công.',503,{code:String(e?.message||'AI_ERROR'),provider_status:e?.providerStatus||null,auth:{ok:true,status:auth.status,code:auth.code,me:auth.me?{ok:auth.me.ok,status:auth.me.status}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status}:null},key_diagnostic:auth.key,responses:{ok:false,status:e?.providerStatus||null},detail:String(e?.internalDetail||'').slice(0,600),latency_ms:Date.now()-started});
+      return bad('Kiểm tra Sky First AI chưa thành công.',503,{code:String(e?.message||'AI_ERROR'),provider_status:e?.providerStatus||null,auth:{ok:true,status:auth.status,code:auth.code,me:auth.me?{ok:auth.me.ok,status:auth.me.status}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status}:null},responses:{ok:false,status:e?.providerStatus||null},detail:String(e?.internalDetail||'').slice(0,600),latency_ms:Date.now()-started});
     }
   }
 
@@ -1100,7 +1086,7 @@ async function routeApi(request, env, ctx, url) {
     try{await env.DB.prepare(`SELECT 1 FROM live_access_tokens LIMIT 1`).first();add('Live access V10',true,'Bảng token phòng học sẵn sàng')}catch(e){add('Live access V10',false,e.message)}
     try{await env.DB.prepare(`SELECT 1 FROM class_messages LIMIT 1`).first();add('Class chat V10',true,'Bảng trò chuyện sẵn sàng')}catch(e){add('Class chat V10',false,e.message)}
     add('R2 FILES',!!env.FILES,env.FILES?'Binding FILES đã có':'Thiếu binding FILES');
-    add('Kênh đồng bộ Live',true,env.LIVE_ROOM?'Kênh WebSocket sẵn sàng':'Kênh tương thích Pages/D1 sẵn sàng');
+    add('Durable Object LIVE_ROOM',!!env.LIVE_ROOM,env.LIVE_ROOM?'Binding LIVE_ROOM đã có':'Thiếu binding LIVE_ROOM');
     {const sf=realtimeSfuConfig(env);add('Realtime SFU / skyfirsthoc',sf.configured,sf.configured?`Đã cấu hình ${sf.appName}`:'Thiếu REALTIME_APP_ID hoặc REALTIME_APP_SECRET');}
     add('Resend',!!env.RESEND_API_KEY,env.RESEND_API_KEY?'RESEND_API_KEY đã cấu hình':'Chưa có RESEND_API_KEY; email sẽ không gửi');
     {const ai=aiProviderConfig(env);add('Sky First AI',ai.configured,ai.configured?`Provider ${ai.provider}; model ${ai.model}`:'Thiếu AI_API_KEY hoặc cấu hình provider/model');}
@@ -1131,6 +1117,85 @@ async function routeApi(request, env, ctx, url) {
     return ok({...base,failed_emails:failedMail?.n||0,active_sessions:activeSessions?.n||0,live_tokens:liveTokens?.n||0});
   }
 
+
+  // Master requirements 1-35: profile identity, organizations, calendar, resources and notifications.
+  if(path==='/api/account/profile' && method==='GET'){
+    const u=await requireUser(request,env);
+    const prefs=await env.DB.prepare(`SELECT key,value FROM user_preferences WHERE user_id=?`).bind(u.user_id).all().catch(()=>({results:[]}));
+    return ok({profile:u,preferences:Object.fromEntries((prefs.results||[]).map(x=>[x.key,x.value]))});
+  }
+  const avatarImage=path.match(/^\/api\/avatar\/([^/]+)$/);
+  if(avatarImage && method==='GET'){
+    await requireUser(request,env); const row=await env.DB.prepare(`SELECT avatar_key FROM users WHERE id=? AND status='active'`).bind(avatarImage[1]).first(); if(!row?.avatar_key)return bad('Không có ảnh đại diện.',404);
+    const obj=await env.FILES.get(row.avatar_key); if(!obj)return bad('Ảnh đại diện không còn trong kho.',404); const h=new Headers();obj.writeHttpMetadata(h);h.set('cache-control','private, max-age=300');h.set('x-content-type-options','nosniff');return new Response(obj.body,{headers:h});
+  }
+
+  if(path==='/api/account/avatar' && method==='POST'){
+    const u=await requireUser(request,env); const form=await request.formData(); const file=form.get('avatar');
+    const err=validateUpload(file,{maxMb:8,mimes:['image/jpeg','image/png','image/webp'],label:'Ảnh đại diện'}); if(err)return bad(err,400);
+    const saved=await uploadR2(file,env,'avatars',u.user_id,'private');
+    await env.DB.prepare(`UPDATE users SET avatar_key=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(saved.key,u.user_id).run();
+    return ok({avatar_key:saved.key,file_id:saved.id});
+  }
+  if(path==='/api/account/avatar' && method==='DELETE'){
+    const u=await requireUser(request,env); await env.DB.prepare(`UPDATE users SET avatar_key=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(u.user_id).run(); return ok();
+  }
+  if(path==='/api/account/preferences' && method==='PATCH'){
+    const u=await requireUser(request,env); const body=await request.json();
+    for(const [k,v] of Object.entries(body||{})){if(!['theme','notifications','accessibility','profile_visibility'].includes(k))continue;await env.DB.prepare(`INSERT INTO user_preferences(user_id,key,value,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`).bind(u.user_id,k,String(v).slice(0,1000)).run();}
+    return ok();
+  }
+  if(path==='/api/admin/organizations' && method==='GET'){
+    await requireRole(request,env,['super_admin']);
+    const rows=await env.DB.prepare(`SELECT o.*,s.plan_code subscription_plan,s.status subscription_status,s.expires_at subscription_expires_at,(SELECT COUNT(*) FROM organization_members om WHERE om.organization_id=o.id AND om.status='active') member_count,(SELECT COUNT(*) FROM classes c WHERE COALESCE(c.organization_id,'sky-first')=o.id) class_count FROM organizations o LEFT JOIN organization_subscriptions s ON s.organization_id=o.id ORDER BY o.created_at DESC`).all().catch(()=>({results:[]}));
+    return ok({organizations:rows.results||[]});
+  }
+  if(path==='/api/admin/organizations' && method==='POST'){
+    const admin=await requireRole(request,env,['super_admin']); const b=await request.json();
+    const name=str(b.name).slice(0,120), slug=str(b.slug||name).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,80);
+    if(name.length<2||slug.length<2)return bad('Tên tổ chức chưa hợp lệ.'); const id=crypto.randomUUID();
+    await env.DB.prepare(`INSERT INTO organizations(id,name,slug,status,plan,created_at,updated_at) VALUES(?,?,?,'active',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,name,slug,str(b.plan||'community')).run();
+    await env.DB.prepare(`INSERT OR IGNORE INTO organization_subscriptions(organization_id,plan_code,status,source,updated_at) VALUES(?,?,'active',?,CURRENT_TIMESTAMP)`).bind(id,str(b.plan||'community'),str(b.source||'grant')).run();
+    await adminLog(env,admin.user_id,'organization.create',{organization_id:id,name,slug}); return ok({id});
+  }
+  const adminOrg=path.match(/^\/api\/admin\/organizations\/([^/]+)$/);
+  if(adminOrg && method==='PATCH'){
+    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const status=['active','suspended','expired','trial'].includes(b.status)?b.status:null;
+    if(!status)return bad('Trạng thái tổ chức không hợp lệ.'); await env.DB.prepare(`UPDATE organizations SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(status,adminOrg[1]).run();
+    await adminLog(env,admin.user_id,'organization.status',{organization_id:adminOrg[1],status}); return ok();
+  }
+  const ent=path.match(/^\/api\/admin\/organizations\/([^/]+)\/entitlements$/);
+  if(ent && method==='GET'){
+    await requireRole(request,env,['super_admin']); const rows=await env.DB.prepare(`SELECT capability,enabled,quota_value,expires_at,source,updated_at FROM organization_entitlements WHERE organization_id=? ORDER BY capability`).bind(ent[1]).all(); return ok({entitlements:rows.results||[]});
+  }
+  if(ent && method==='PUT'){
+    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const items=Array.isArray(b.entitlements)?b.entitlements:[];
+    for(const x of items.slice(0,100)){const capability=str(x.capability).slice(0,100);if(!capability)continue;await env.DB.prepare(`INSERT INTO organization_entitlements(organization_id,capability,enabled,quota_value,expires_at,source,updated_at) VALUES(?,?,?,?,?, ?,CURRENT_TIMESTAMP) ON CONFLICT(organization_id,capability) DO UPDATE SET enabled=excluded.enabled,quota_value=excluded.quota_value,expires_at=excluded.expires_at,source=excluded.source,updated_at=CURRENT_TIMESTAMP`).bind(ent[1],capability,x.enabled?1:0,Number.isFinite(Number(x.quota_value))?Number(x.quota_value):null,x.expires_at||null,str(x.source||'override')).run();}
+    await adminLog(env,admin.user_id,'organization.entitlements',{organization_id:ent[1],count:items.length}); return ok();
+  }
+  const usage=path.match(/^\/api\/admin\/organizations\/([^/]+)\/usage$/);
+  if(usage && method==='GET'){
+    await requireRole(request,env,['super_admin']); const org=usage[1]; const members=await env.DB.prepare(`SELECT COUNT(*) n FROM organization_members WHERE organization_id=? AND status='active'`).bind(org).first().catch(()=>({n:0})); const classes=await env.DB.prepare(`SELECT COUNT(*) n FROM classes WHERE COALESCE(organization_id,'sky-first')=?`).bind(org).first().catch(()=>({n:0})); const custom=await env.DB.prepare(`SELECT metric,value,period_key,updated_at FROM organization_usage WHERE organization_id=?`).bind(org).all().catch(()=>({results:[]})); return ok({members:members?.n||0,classes:classes?.n||0,metrics:custom.results||[]});
+  }
+  if(path==='/api/organizations/mine' && method==='GET'){
+    const u=await requireUser(request,env);
+    let rows=(await env.DB.prepare(`SELECT o.id,o.name,o.slug,o.status,o.plan,om.role FROM organizations o JOIN organization_members om ON om.organization_id=o.id WHERE om.user_id=? AND om.status='active' AND o.status='active' ORDER BY o.name`).bind(u.user_id).all().catch(()=>({results:[]}))).results||[];
+    if(!rows.length)rows=[{id:'sky-first',name:'Sky First Network',slug:'sky-first',status:'active',plan:'community',role:u.role==='super_admin'?'owner':'member'}];
+    return ok({organizations:rows});
+  }
+  if(path==='/api/notifications' && method==='GET'){
+    const u=await requireUser(request,env);const rows=await env.DB.prepare(`SELECT * FROM notification_center WHERE user_id=? OR user_id IS NULL ORDER BY created_at DESC LIMIT 80`).bind(u.user_id).all();return ok({notifications:rows.results||[]});
+  }
+  if(path==='/api/notifications/read-all' && method==='POST'){
+    const u=await requireUser(request,env);await env.DB.prepare(`UPDATE notification_center SET is_read=1 WHERE user_id=?`).bind(u.user_id).run();return ok();
+  }
+  if(path==='/api/calendar' && method==='GET'){
+    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u);const rows=await env.DB.prepare(`SELECT ce.* FROM calendar_events ce WHERE ce.organization_id=? ORDER BY ce.starts_at LIMIT 200`).bind(org).all().catch(()=>({results:[]}));return ok({events:rows.results||[],organization_id:org});
+  }
+  if(path==='/api/resources' && method==='GET'){
+    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u);const rows=await env.DB.prepare(`SELECT m.id,m.class_id,m.title,m.created_at,f.id file_id,f.name,f.mime,f.size,c.name class_name FROM materials m JOIN files f ON f.id=m.file_id JOIN classes c ON c.id=m.class_id JOIN class_members cm ON cm.class_id=m.class_id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id,org).all();return ok({resources:rows.results||[],organization_id:org});
+  }
+
   const fileMatch=path.match(/^\/api\/files\/([^/]+)$/);
   if(fileMatch && method==='GET'){
     const u=await requireUser(request,env); const f=await env.DB.prepare(`SELECT * FROM files WHERE id=?`).bind(fileMatch[1]).first(); if(!f)return bad('Không tìm thấy tệp.',404);
@@ -1140,9 +1205,34 @@ async function routeApi(request, env, ctx, url) {
     const headers=new Headers(); obj.writeHttpMetadata(headers); const unsafe=new Set(['text/html','image/svg+xml','application/xhtml+xml','text/javascript','application/javascript']); headers.set('content-disposition',`${unsafe.has(String(f.mime||'').toLowerCase())?'attachment':'inline'}; filename*=UTF-8''${encodeURIComponent(f.name)}`); headers.set('x-content-type-options','nosniff'); headers.set('cache-control','private, no-store'); if(unsafe.has(String(f.mime||'').toLowerCase()))headers.set('content-security-policy',"sandbox; default-src 'none'"); return new Response(obj.body,{headers});
   }
 
+
+  const signalEvents=path.match(/^\/api\/live\/([^/]+)\/events$/);
+  if(signalEvents && method==='GET'){
+    const classId=signalEvents[1], token=str(url.searchParams.get('token')), after=Math.max(0,Number(url.searchParams.get('after')||0));
+    const access=await requireLiveAccess(env,classId,token); await ensureLiveSignalFallbackSchema(env);
+    await env.DB.prepare(`INSERT INTO live_signal_presence(class_id,peer_key,display_name,role,last_seen) VALUES(?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(class_id,peer_key) DO UPDATE SET display_name=excluded.display_name,role=excluded.role,last_seen=CURRENT_TIMESTAMP`).bind(classId,access.owner_key,access.display_name,access.role).run();
+    await env.DB.prepare(`DELETE FROM live_signal_presence WHERE class_id=? AND last_seen<datetime('now','-45 seconds')`).bind(classId).run().catch(()=>{});
+    await env.DB.prepare(`DELETE FROM live_signal_events WHERE class_id=? AND created_at<datetime('now','-10 minutes')`).bind(classId).run().catch(()=>{});
+    const [events,presence]=await Promise.all([
+      env.DB.prepare(`SELECT id,sender_key,sender_name,sender_role,target_key,event_type,payload_json,created_at FROM live_signal_events WHERE class_id=? AND id>? AND (target_key IS NULL OR target_key='' OR target_key=?) ORDER BY id ASC LIMIT 200`).bind(classId,after,access.owner_key).all(),
+      env.DB.prepare(`SELECT peer_key,display_name,role,last_seen FROM live_signal_presence WHERE class_id=? AND last_seen>=datetime('now','-45 seconds') ORDER BY display_name`).bind(classId).all()
+    ]);
+    return ok({transport:'pages-d1',self_key:access.owner_key,events:(events.results||[]).map(x=>({id:x.id,type:x.event_type,from:x.sender_key,fromName:x.sender_name,fromRole:x.sender_role,to:x.target_key||null,...safeJson(x.payload_json,{})})),roster:(presence.results||[]).map(x=>({id:x.peer_key,name:x.display_name,role:x.role,last_seen:x.last_seen}))});
+  }
+  if(signalEvents && method==='POST'){
+    const classId=signalEvents[1], b=await request.json(), access=await requireLiveAccess(env,classId,b.access_token); await ensureLiveSignalFallbackSchema(env);
+    const type=str(b.type).slice(0,60), allowed=new Set(['chat','reaction','raise-hand','media-state','media-track-published','media-track-unpublished','offer','answer','ice','host-command','teaching-event','annotation','breakout','presenter']);
+    if(!allowed.has(type))return bad('Sự kiện phòng học không hợp lệ.',400);
+    const target=str(b.to).slice(0,160)||null; const payload={...b}; delete payload.access_token; delete payload.type; delete payload.to;
+    if(['host-command','breakout','presenter'].includes(type) && !['teacher','assistant','school_admin','super_admin'].includes(access.role)) return bad('Bạn không có quyền thực hiện thao tác này.',403);
+    await env.DB.prepare(`INSERT INTO live_signal_presence(class_id,peer_key,display_name,role,last_seen) VALUES(?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(class_id,peer_key) DO UPDATE SET display_name=excluded.display_name,role=excluded.role,last_seen=CURRENT_TIMESTAMP`).bind(classId,access.owner_key,access.display_name,access.role).run();
+    const r=await env.DB.prepare(`INSERT INTO live_signal_events(class_id,sender_key,sender_name,sender_role,target_key,event_type,payload_json,created_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(classId,access.owner_key,access.display_name,access.role,target,type,JSON.stringify(payload).slice(0,24000)).run();
+    return ok({event_id:r.meta?.last_row_id||null,transport:'pages-d1'});
+  }
+
   if(path==='/api/live/capabilities' && method==='GET'){
     await requireUser(request,env);
-    return ok({media:true,discussion:true,realtime:true,realtime_transport:env.LIVE_ROOM?'websocket':'pages_http',screen_share:true});
+    return ok({media:true,discussion:true,realtime:true,realtime_transport:env.LIVE_ROOM?'durable-object':'pages-d1',screen_share:true});
   }
 
   const wsMatch=path.match(/^\/api\/live\/([^/]+)\/ws$/);
@@ -1150,7 +1240,7 @@ async function routeApi(request, env, ctx, url) {
     if(env.LIVE_ROOM){
       const id=env.LIVE_ROOM.idFromName(wsMatch[1]); return env.LIVE_ROOM.get(id).fetch(request);
     }
-    return bad('Kết nối trực tiếp chưa khả dụng; ứng dụng sẽ dùng kênh đồng bộ tương thích.',426,{code:'LIVE_USE_HTTP_RUNTIME'});
+    return bad('Phòng học trực tuyến thời gian thực chưa được liên kết. Các chức năng học tập khác vẫn hoạt động bình thường.',503,{code:'LIVE_SIGNALING_NOT_BOUND'});
   }
 
   return bad(`API không tồn tại: ${method} ${path}`,404,{code:'API_ROUTE_NOT_FOUND',area:'API_ROUTER',method,path});

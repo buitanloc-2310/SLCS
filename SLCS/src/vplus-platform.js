@@ -253,31 +253,8 @@ function extractOpenAIResponseSources(data){
 }
 
 
-async function sha256Short(value=''){
-  try{
-    const bytes=new TextEncoder().encode(String(value));
-    const digest=await crypto.subtle.digest('SHA-256',bytes);
-    return Array.from(new Uint8Array(digest)).slice(0,8).map(b=>b.toString(16).padStart(2,'0')).join('');
-  }catch{return ''}
-}
-
 export async function aiKeyDiagnostic(env){
-  const raw=String(env?.AI_API_KEY||'');
-  const normalized=raw.trim();
-  const prefix=normalized.startsWith('sk-proj-')?'sk-proj':normalized.startsWith('sk-svcacct-')?'sk-svcacct':normalized.startsWith('sk-')?'sk':(normalized?'other':'missing');
-  return {
-    present:!!normalized,
-    raw_length:raw.length,
-    normalized_length:normalized.length,
-    whitespace_trimmed:raw!==normalized,
-    key_type:prefix,
-    fingerprint:normalized?await sha256Short(normalized):'',
-    runtime:{
-      pages:String(env?.CF_PAGES||'')==='1',
-      branch:String(env?.CF_PAGES_BRANCH||'').slice(0,120)||null,
-      commit:String(env?.CF_PAGES_COMMIT_SHA||'').slice(0,12)||null
-    }
-  };
+  return {present:!!String(env?.AI_API_KEY||'').trim()};
 }
 
 async function probeOpenAIEndpoint(url,apiKey,timeoutMs){

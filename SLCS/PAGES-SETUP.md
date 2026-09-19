@@ -49,7 +49,7 @@ Nếu D1 chưa có schema, giao diện cài đặt lần đầu sẽ cho phép n
 
 ## Lớp học trực tuyến realtime
 
-Cloudflare Pages Functions có thể **sử dụng** Durable Object, nhưng Cloudflare không cho tạo/deploy Durable Object ngay bên trong Pages project. Vì vậy toàn bộ phần tài khoản, D1, R2, lớp học, bài tập, thi, quản trị, email, hỗ trợ... chạy trên Pages Functions; riêng WebSocket realtime của phòng học cần một Durable Object Worker có sẵn và binding `LIVE_ROOM`, hoặc Service Binding `LIVE_SERVICE`.
+Project giữ kiến trúc Cloudflare Pages. Tài khoản, D1, R2, lớp học, bài tập, thi, quản trị, email và hỗ trợ chạy trên Pages Functions. Realtime ưu tiên kênh WebSocket/Durable Object khi môi trường có binding phù hợp; nếu không, source có kênh đồng bộ dự phòng qua Pages Functions + D1 để chat, presence, signaling và điều khiển lớp không bị mắc ở trạng thái reconnect. Media nhiều người vẫn ưu tiên Cloudflare Realtime/SFU.
 
 Nếu chưa liên kết realtime, API phòng live trả mã 503 rõ ràng thay vì làm hỏng toàn hệ thống.
 

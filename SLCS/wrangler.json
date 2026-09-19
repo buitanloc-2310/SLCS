@@ -21,7 +21,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "sfn-slc-db",
+      "database_name": "skyfirsthoctap",
       "database_id": "6fd6a6c3-aae6-4b11-89e0-8e13a0e27d3c"
     }
   ],

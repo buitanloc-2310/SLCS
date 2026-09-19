@@ -42,10 +42,6 @@ async function requireUser(req, env) { const u=await getSession(req,env); if(!u)
 async function requireRole(req, env, roles) { const u=await requireUser(req,env); if(!roles.includes(u.role)) throw Object.assign(new Error('FORBIDDEN'),{status:403}); return u; }
 async function requireOrganizationContext(request,env,u){const requested=str(request.headers.get('x-organization-id')||'sky-first')||'sky-first';if(u.role==='super_admin'){const o=await env.DB.prepare(`SELECT id FROM organizations WHERE id=? AND status='active'`).bind(requested).first().catch(()=>null);return o?.id||'sky-first'}const m=await env.DB.prepare(`SELECT organization_id FROM organization_members WHERE organization_id=? AND user_id=? AND status='active'`).bind(requested,u.user_id).first().catch(()=>null);if(m)return requested;if(requested==='sky-first')return 'sky-first';throw Object.assign(new Error('FORBIDDEN'),{status:403});}
 
-async function classesHaveOrganizationColumn(env){
-  try{await env.DB.prepare(`SELECT organization_id FROM classes LIMIT 0`).all();return true}catch{return false}
-}
-
 async function activeExam(userId, env) { return reconcileActiveExam(userId,env); }
 
 async function uploadR2(file, env, prefix, ownerId=null, visibility='private') {
@@ -138,8 +134,9 @@ function activationEmail(env,{fullName,sfnId,activationUrl}){
 }
 async function writeEmailLog(env,{to,subject,status,providerId='',error=''}){try{await env.DB.prepare(`INSERT INTO email_logs(id,to_email,subject,status,provider_message_id,error,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),to,subject,status,providerId,error).run()}catch{}}
 async function sendMail(env,to,subject,html){
-  if(!env.RESEND_API_KEY){await writeEmailLog(env,{to,subject,status:'skipped',error:'RESEND_API_KEY_NOT_CONFIGURED'});return {sent:false,reason:'RESEND_API_KEY_NOT_CONFIGURED'};}
-  const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{authorization:`Bearer ${env.RESEND_API_KEY}`,'content-type':'application/json'},body:JSON.stringify({from:env.MAIL_FROM||'Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>',to:[to],subject,html})});
+  const resendKey=String(env.RESEND_API_KEY||env.RESEND_KEY||env.RESEND_TOKEN||'').trim();
+  if(!resendKey){await writeEmailLog(env,{to,subject,status:'skipped',error:'RESEND_API_KEY_NOT_CONFIGURED'});return {sent:false,reason:'RESEND_API_KEY_NOT_CONFIGURED'};}
+  const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{authorization:`Bearer ${resendKey}`,'content-type':'application/json'},body:JSON.stringify({from:env.MAIL_FROM||'Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>',to:[to],subject,html})});
   if(!r.ok){const reason=await r.text();await writeEmailLog(env,{to,subject,status:'failed',error:reason});return {sent:false,reason};}
   const data=await r.json();await writeEmailLog(env,{to,subject,status:'sent',providerId:data.id||''});return {sent:true,data};
 }
@@ -423,28 +420,19 @@ async function routeApi(request, env, ctx, url) {
   }
   if (path === '/api/classes' && method === 'GET') {
     const u=await requireUser(request,env), org=await requireOrganizationContext(request,env,u);
-    const scoped=await classesHaveOrganizationColumn(env);
-    // Compatibility path: production databases that have not received the additive
-    // organization_id migration must continue serving their existing Sky First classes.
-    if(!scoped && org!=='sky-first') return ok({classes:[],organization_id:org,migration_pending:true});
-    const sql=scoped
-      ? `SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? ORDER BY c.updated_at DESC`
-      : `SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' ORDER BY c.updated_at DESC`;
-    const stmt=env.DB.prepare(sql);
-    const rows=scoped?await stmt.bind(u.user_id,org).all():await stmt.bind(u.user_id).all();
-    return ok({classes:rows.results||[],organization_id:org,migration_pending:!scoped});
+    const rows=await env.DB.prepare(`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? ORDER BY c.updated_at DESC`).bind(u.user_id,org).all();
+    return ok({classes:rows.results,organization_id:org});
   }
 
   if (path === '/api/classes' && method === 'POST') {
     const u=await requireRole(request,env,['super_admin','school_admin','teacher']), org=await requireOrganizationContext(request,env,u);
     const b=await request.json(); if(!str(b.name)) return bad('Tên lớp không được để trống.');
-    const id=crypto.randomUUID(), joinCode=slugCode('SLC'), scoped=await classesHaveOrganizationColumn(env);
-    if(!scoped && org!=='sky-first') return bad('Khu vực tổ chức này đang được hoàn tất thiết lập. Vui lòng thử lại sau.',503);
-    const insertClass=scoped
-      ? env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,organization_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id,org)
-      : env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id);
-    await env.DB.batch([insertClass,env.DB.prepare(`INSERT INTO class_members(class_id,user_id,role,status,joined_at) VALUES(?,?,'teacher','active',CURRENT_TIMESTAMP)`).bind(id,u.user_id)]);
-    return ok({id,join_code:joinCode,organization_id:org,migration_pending:!scoped});
+    const id=crypto.randomUUID(), joinCode=slugCode('SLC');
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO classes(id,name,description,unit,cover_key,join_code,owner_user_id,status,organization_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,str(b.name),str(b.description),str(b.unit),null,joinCode,u.user_id,org),
+      env.DB.prepare(`INSERT INTO class_members(class_id,user_id,role,status,joined_at) VALUES(?,?,'teacher','active',CURRENT_TIMESTAMP)`).bind(id,u.user_id)
+    ]);
+    return ok({id,join_code:joinCode,organization_id:org});
   }
 
   const classMatch=path.match(/^\/api\/classes\/([^/]+)$/);
@@ -779,11 +767,11 @@ async function routeApi(request, env, ctx, url) {
   if(path==='/api/admin/settings' && method==='GET'){
     const admin=await requireRole(request,env,['super_admin','school_admin']); const all=await getSettings(env);
     if(admin.role==='super_admin') return ok({settings:all});
-    const allowed=['public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','account_request_enabled','maintenance_mode','maintenance_message','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','public_status_text'];
+    const allowed=['public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','account_request_enabled','maintenance_mode','maintenance_message','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','public_hero_eyebrow','public_hero_side_title','public_hero_side_text','public_feature_1_title','public_feature_1_text','public_feature_2_title','public_feature_2_text','public_feature_3_title','public_feature_3_text','public_feature_4_title','public_feature_4_text','public_learner_title','public_learner_text','public_learner_quote','public_teacher_title','public_teacher_text','public_teacher_before_title','public_teacher_before_text','public_teacher_during_title','public_teacher_during_text','public_teacher_after_title','public_teacher_after_text','public_safety_title','public_safety_text','public_faq_title','public_faq_1_q','public_faq_1_a','public_faq_2_q','public_faq_2_a','public_faq_3_q','public_faq_3_a','public_faq_4_q','public_faq_4_a','public_cta_title','public_cta_text','public_status_text'];
     return ok({settings:Object.fromEntries(allowed.filter(k=>Object.prototype.hasOwnProperty.call(all,k)).map(k=>[k,all[k]]))});
   }
   if(path==='/api/admin/settings' && method==='PUT'){
-    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const allowed=['live_room_max_participants','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_status_text']; const statements=[];
+    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const allowed=['live_room_max_participants','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_hero_eyebrow','public_hero_side_title','public_hero_side_text','public_feature_1_title','public_feature_1_text','public_feature_2_title','public_feature_2_text','public_feature_3_title','public_feature_3_text','public_feature_4_title','public_feature_4_text','public_learner_title','public_learner_text','public_learner_quote','public_teacher_title','public_teacher_text','public_teacher_before_title','public_teacher_before_text','public_teacher_during_title','public_teacher_during_text','public_teacher_after_title','public_teacher_after_text','public_safety_title','public_safety_text','public_faq_title','public_faq_1_q','public_faq_1_a','public_faq_2_q','public_faq_2_a','public_faq_3_q','public_faq_3_a','public_faq_4_q','public_faq_4_a','public_cta_title','public_cta_text','public_status_text']; const statements=[];
     for(const key of allowed){if(Object.prototype.hasOwnProperty.call(b,key))statements.push(env.DB.prepare(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(key,str(b[key]),admin.user_id));}
     if(statements.length)await env.DB.batch(statements); await adminLog(env,admin.user_id,'settings.update',{keys:statements.length}); return ok({settings:await getSettings(env)});
   }
@@ -1221,16 +1209,17 @@ async function routeApi(request, env, ctx, url) {
 
   const signalEvents=path.match(/^\/api\/live\/([^/]+)\/events$/);
   if(signalEvents && method==='GET'){
-    const classId=signalEvents[1], token=str(url.searchParams.get('token')), after=Math.max(0,Number(url.searchParams.get('after')||0));
+    const classId=signalEvents[1], token=str(url.searchParams.get('token')), after=Math.max(0,Number(url.searchParams.get('after')||0)), initial=url.searchParams.get('initial')==='1';
     const access=await requireLiveAccess(env,classId,token); await ensureLiveSignalFallbackSchema(env);
     await env.DB.prepare(`INSERT INTO live_signal_presence(class_id,peer_key,display_name,role,last_seen) VALUES(?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(class_id,peer_key) DO UPDATE SET display_name=excluded.display_name,role=excluded.role,last_seen=CURRENT_TIMESTAMP`).bind(classId,access.owner_key,access.display_name,access.role).run();
     await env.DB.prepare(`DELETE FROM live_signal_presence WHERE class_id=? AND last_seen<datetime('now','-45 seconds')`).bind(classId).run().catch(()=>{});
     await env.DB.prepare(`DELETE FROM live_signal_events WHERE class_id=? AND created_at<datetime('now','-10 minutes')`).bind(classId).run().catch(()=>{});
-    const [events,presence]=await Promise.all([
-      env.DB.prepare(`SELECT id,sender_key,sender_name,sender_role,target_key,event_type,payload_json,created_at FROM live_signal_events WHERE class_id=? AND id>? AND (target_key IS NULL OR target_key='' OR target_key=?) ORDER BY id ASC LIMIT 200`).bind(classId,after,access.owner_key).all(),
-      env.DB.prepare(`SELECT peer_key,display_name,role,last_seen FROM live_signal_presence WHERE class_id=? AND last_seen>=datetime('now','-45 seconds') ORDER BY display_name`).bind(classId).all()
+    const [events,presence,latest]=await Promise.all([
+      initial?Promise.resolve({results:[]}):env.DB.prepare(`SELECT id,sender_key,sender_name,sender_role,target_key,event_type,payload_json,created_at FROM live_signal_events WHERE class_id=? AND id>? AND (target_key IS NULL OR target_key='' OR target_key=?) ORDER BY id ASC LIMIT 200`).bind(classId,after,access.owner_key).all(),
+      env.DB.prepare(`SELECT peer_key,display_name,role,last_seen FROM live_signal_presence WHERE class_id=? AND last_seen>=datetime('now','-45 seconds') ORDER BY display_name`).bind(classId).all(),
+      env.DB.prepare(`SELECT COALESCE(MAX(id),0) latest_id FROM live_signal_events WHERE class_id=?`).bind(classId).first()
     ]);
-    return ok({transport:'pages-d1',self_key:access.owner_key,events:(events.results||[]).map(x=>({id:x.id,type:x.event_type,from:x.sender_key,fromName:x.sender_name,fromRole:x.sender_role,to:x.target_key||null,...safeJson(x.payload_json,{})})),roster:(presence.results||[]).map(x=>({id:x.peer_key,name:x.display_name,role:x.role,last_seen:x.last_seen}))});
+    return ok({transport:'pages-d1',self_key:access.owner_key,latest_id:Number(latest?.latest_id||0),events:(events.results||[]).map(x=>({id:x.id,type:x.event_type,from:x.sender_key,fromName:x.sender_name,fromRole:x.sender_role,to:x.target_key||null,...safeJson(x.payload_json,{})})),roster:(presence.results||[]).map(x=>({id:x.peer_key,name:x.display_name,role:x.role,last_seen:x.last_seen}))});
   }
   if(signalEvents && method==='POST'){
     const classId=signalEvents[1], b=await request.json(), access=await requireLiveAccess(env,classId,b.access_token); await ensureLiveSignalFallbackSchema(env);

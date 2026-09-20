@@ -1,6 +1,6 @@
 {
   "name": "sfn-slc",
-  "version": "23.2.1-p0.1-guest-sfu",
+  "version": "24.4.0-p2.4-hardening",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,7 +13,12 @@
     "deploy:p0": "npm run check && npm run deploy",
     "validate:p0": "npm run validate:vplus && node scripts/validate-p0.mjs",
     "validate:config": "node scripts/validate-config.mjs",
-    "validate:p2": "npm run validate:p0 && npm run validate:config && node scripts/validate-p2.mjs"
+    "validate:p2": "npm run validate:p0 && npm run validate:config && node scripts/validate-p2.mjs",
+    "validate:p11": "npm run validate:p0 && node scripts/validate-p11.mjs",
+    "validate:p21": "npm run validate:p11 && node scripts/validate-p21.mjs",
+    "validate:p22": "npm run validate:p21 && node scripts/validate-p22.mjs",
+    "validate:p23": "npm run validate:p22 && node scripts/validate-p23.mjs",
+    "validate:p24": "npm run validate:p23 && npm run validate:p2 && node scripts/validate-p24.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.34.0"

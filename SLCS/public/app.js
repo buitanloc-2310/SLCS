@@ -6,8 +6,8 @@ applyTheme(localStorage.getItem(THEME_KEY)||'system');
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{if((localStorage.getItem(THEME_KEY)||'system')==='system')applyTheme('system')});
 function cycleTheme(){const cur=localStorage.getItem(THEME_KEY)||'system';const next=cur==='system'?'light':cur==='light'?'dark':'system';applyTheme(next);document.querySelectorAll('[data-theme-toggle]').forEach(b=>{b.dataset.themeLabel=next;b.title=`Giao diện: ${{system:'Theo thiết bị',light:'Sáng',dark:'Tối'}[next]}`;b.querySelector('span')&&(b.querySelector('span').textContent=({system:'◐',light:'☀',dark:'☾'}[next]))})}
 const loadAiModule=()=>_aiModulePromise||=import('/ai/vplus-ai.js');
-const loadClassroomModule=()=>_classroomModulePromise||=import('/classroom/classroom-plus.js');
-const loadMediaModule=()=>_mediaModulePromise||=import('/classroom/media-client.js');
+const loadClassroomModule=()=>_classroomModulePromise||=import('/classroom/classroom-plus.js?v=20260920-p01-guest-sfu1');
+const loadMediaModule=()=>_mediaModulePromise||=import('/classroom/media-client.js?v=20260920-p01-guest-sfu1');
 const loadQrLibrary=()=>{if(window.SLCQRCode)return Promise.resolve(window.SLCQRCode);if(_qrPromise)return _qrPromise;_qrPromise=new Promise((resolve,reject)=>{const x=document.createElement('script');x.src='/vendor/slc-qrcode.js?v=20260919-qr-local1';x.async=true;x.onload=()=>window.SLCQRCode?resolve(window.SLCQRCode):reject(new Error('QR_INIT_FAILED'));x.onerror=()=>reject(new Error('QR_LOAD_FAILED'));document.head.appendChild(x)});return _qrPromise};
 function mountSkyFirstAI(opts){
   document.querySelector('#sfnAiLauncher')?.remove();_aiLazyButton?.remove();
@@ -132,9 +132,10 @@ async function liveRoom(classId,guestName=null){
   access=guestName
     ? await api(`/api/public/live/${classId}/guest-token`,{method:'POST',body:JSON.stringify({name:guestName})})
     : await api('/api/live/access-token',{method:'POST',body:JSON.stringify({class_id:classId})});
-  const mediaInfo=await api('/api/live/media/status',{method:'POST',body:JSON.stringify({class_id:classId,access_token:access.token})}).catch(()=>({ready:false}));
+  const mediaInfo=await api('/api/live/media/status',{method:'POST',body:JSON.stringify({class_id:classId,access_token:access.token})}).catch((e)=>{console.warn('[P0][MEDIA_STATUS_FAILED]',e?.message||e);return {configured:false}});
   let sfuMode=false;
-  const sfuConfigured=!!mediaInfo.configured;
+  const sfuConfigured=mediaInfo?.configured===true;
+  console.log('[P0][MEDIA_STATUS]',{guest:!!guestName,configured:sfuConfigured,transport:mediaInfo?.transport||''});
   let mediaTransportState='MEDIA_UNKNOWN';
   app.innerHTML=`<div class="meeting-app">
     <header class="meeting-topbar">
@@ -498,7 +499,9 @@ async function liveRoom(classId,guestName=null){
       try{
         if(attempt)await new Promise(r=>setTimeout(r,1000));
         const candidate=new SkyMediaClient({classId,accessToken:access.token,api,onRemoteTrack:attachRemoteSfuTrack,onState:st=>{if(String(st).includes('failed'))console.warn('[SLC Live] media transport',st)},maxVideoSubscriptions:Number(classroomData.settings?.max_visible_videos||12)});
+        console.log('[P0][SFU_INIT_ATTEMPT]',{guest:!!guestName,attempt:attempt+1,classId});
         await candidate.init();
+        console.log('[P0][SFU_SESSION_READY]',{guest:!!guestName,sessionId:candidate.sessionId});
         sfu=candidate;sfuMode=true;mediaTransportState='SFU_ACTIVE';
       }catch(e){console.warn('[SLC Live] SFU session attempt failed',attempt+1,e?.message||e);try{await sfu?.close()}catch{};sfu=null}
     }

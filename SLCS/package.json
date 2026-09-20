@@ -1,6 +1,6 @@
 {
   "name": "sfn-slc",
-  "version": "23.2.0-p2-pages-stable",
+  "version": "23.2.1-p0.1-guest-sfu",
   "private": true,
   "type": "module",
   "scripts": {

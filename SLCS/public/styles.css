@@ -350,3 +350,6 @@ body:not(.meeting-body) .main{max-width:1240px;margin:0 auto;padding:24px 22px 5
 .meeting-mini-avatar{overflow:hidden}.meeting-mini-avatar img{width:100%;height:100%;object-fit:cover;display:block}
 .meeting-tile.waiting-media video{opacity:0}.meeting-tile.waiting-media .remote-fallback{display:grid}
 .topbar-inner{gap:18px}.nav{gap:5px;align-items:center}.nav>button{padding:9px 11px;border-radius:10px;background:transparent;border-color:transparent}.nav>button:hover,.nav>button.active{background:#eef6fc;border-color:#d7e6f1}.nav .icon-nav{width:40px;padding:9px}.account-chip{padding:5px 9px!important;border:1px solid #d7e6f1!important;background:#f7fbfe!important}.org-switcher{max-width:190px;border-radius:10px!important;padding:9px 30px 9px 10px!important}
+
+/* P2.3 Beauty Owner */
+.beauty-owner-box{display:grid;gap:9px;padding:12px;border:1px solid #cfe0ee;border-radius:14px;background:linear-gradient(145deg,#f4faff,#edf6fb)}.beauty-owner-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.beauty-owner-head span{font-weight:900;color:#1769c2}.beauty-owner-head small,#beautyState{color:#6d7f8e;font-size:10px}.beauty-owner-box input[type=range]{width:100%}

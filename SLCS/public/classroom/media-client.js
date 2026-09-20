@@ -15,6 +15,7 @@ export class SkyMediaClient {
     this.maxVideoSubscriptions = Math.max(2, Math.min(24, Number(maxVideoSubscriptions || 12)));
     this.videoSubscriptions = new Set();
     this.recovering = false;
+    this.lastError = null;
   }
 
   _serial(fn) {
@@ -37,7 +38,7 @@ export class SkyMediaClient {
     this.pc.addEventListener('connectionstatechange', () => { this.onState(this.pc.connectionState); if(['failed','disconnected'].includes(this.pc.connectionState)) this.recoverIce(); });
     this.pc.addEventListener('iceconnectionstatechange', () => this.onState(`ice:${this.pc.iceConnectionState}`));
     this.pc.addEventListener('track', event => {
-      const mid = event.transceiver?.mid;
+      const mid = event.transceiver?.mid != null ? String(event.transceiver.mid) : '';
       const meta = this.pendingByMid.get(mid) || {};
       if (mid) this.pendingByMid.delete(mid);
       this.onRemoteTrack(event.track, meta, event.streams?.[0] || null);
@@ -58,18 +59,22 @@ export class SkyMediaClient {
       const transceiver = this.pc.addTransceiver(track, { direction: 'sendonly' });
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
-      const trackName = `${source}:${crypto.randomUUID()}`;
+      const trackName = `${source}:${track.id || crypto.randomUUID()}`;
+      const mid = transceiver.mid;
+      if (mid == null) throw new Error('MEDIA_PUBLISH_MID_MISSING');
       const result = await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/tracks`, {
         method: 'POST',
         body: JSON.stringify({
           class_id: this.classId,
           access_token: this.accessToken,
           operation: 'publish',
-          sessionDescription: { type: this.pc.localDescription.type, sdp: this.pc.localDescription.sdp },
-          tracks: [{ location: 'local', mid: transceiver.mid, trackName, kind: track.kind, source }]
+          // Cloudflare's reference flow sends the offer that created the transceiver.
+          sessionDescription: { type: offer.type, sdp: offer.sdp },
+          tracks: [{ location: 'local', mid, trackName, kind: track.kind, source }]
         })
       });
-      if (result.sessionDescription) await this.pc.setRemoteDescription(result.sessionDescription);
+      if (!result?.sessionDescription?.sdp) throw new Error('MEDIA_PUBLISH_SDP_MISSING');
+      await this.pc.setRemoteDescription(result.sessionDescription);
       const cloudTrack = result.tracks?.find(x => x.trackName === trackName) || result.tracks?.[0] || {};
       const meta = {
         sessionId: this.sessionId,
@@ -124,22 +129,28 @@ export class SkyMediaClient {
             tracks: [{ location: 'remote', sessionId: meta.sessionId, trackName: meta.trackName }]
           })
         });
-        for (const t of result.tracks || []) {
+        const pulled = result.tracks || [];
+        if (!pulled.length) throw new Error('MEDIA_SUBSCRIBE_TRACK_MISSING');
+        for (const t of pulled) {
           if (t.mid != null) this.pendingByMid.set(String(t.mid), { ...meta, mid: String(t.mid) });
         }
-        if (result.requiresImmediateRenegotiation && result.sessionDescription) {
+        if (result.requiresImmediateRenegotiation) {
+          if (!result.sessionDescription?.sdp) throw new Error('MEDIA_SUBSCRIBE_OFFER_MISSING');
           await this.pc.setRemoteDescription(result.sessionDescription);
           const answer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(answer);
-          await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`, {
+          const renegotiated = await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`, {
             method: 'PUT',
             body: JSON.stringify({
               class_id: this.classId,
               access_token: this.accessToken,
-              sessionDescription: { type: this.pc.localDescription.type, sdp: this.pc.localDescription.sdp }
+              sessionDescription: { type: answer.type, sdp: answer.sdp }
             })
           });
-        } else if (result.sessionDescription?.type === 'answer') {
+          if (renegotiated?.sessionDescription?.sdp && renegotiated.sessionDescription.type === 'answer' && this.pc.signalingState === 'have-local-offer') {
+            await this.pc.setRemoteDescription(renegotiated.sessionDescription);
+          }
+        } else if (result.sessionDescription?.type === 'answer' && this.pc.signalingState === 'have-local-offer') {
           await this.pc.setRemoteDescription(result.sessionDescription);
         }
       });

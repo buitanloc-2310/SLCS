@@ -233,7 +233,7 @@ async function liveRoom(classId,guestName=null){
       tile.innerHTML=`<video autoplay playsinline></video><div class="meeting-avatar remote-fallback"><div class="meeting-big-initial">${esc((meta.ownerName||meta.owner_name||'T').slice(0,1).toUpperCase())}</div><strong>${esc(meta.ownerName||meta.owner_name||'Thành viên')}</strong></div><div class="meeting-person-label"><span>${esc(meta.ownerName||meta.owner_name||'Thành viên')}${isScreen?' · đang trình chiếu':''}</span><span class="sfu-chip">●</span></div>`;
       $('#stage').appendChild(tile);entry={stream,tile};remoteSfuStreams.set(key,entry);syncPresentationStage();
     }
-    entry.stream.addTrack(track);const video=entry.tile.querySelector('video');video.srcObject=entry.stream;if(isScreen){video.classList.add('screen-share-video');video.style.setProperty('transform','none','important');}
+    if(!entry.stream.getTracks().some(t=>t.id===track.id))entry.stream.addTrack(track);const video=entry.tile.querySelector('video');video.srcObject=entry.stream;video.muted=false;video.volume=1;video.play?.().catch(()=>{setNotice('Trình duyệt đang chặn âm thanh tự động. Hãy bấm vào phòng học một lần để phát âm thanh.','warn')});if(isScreen){video.classList.add('screen-share-video');video.style.setProperty('transform','none','important');}
     track.onunmute=()=>entry.tile.querySelector('.remote-fallback')?.classList.add('hidden');
     track.onended=()=>{try{entry.stream.removeTrack(track)}catch{};if(!entry.stream.getTracks().some(t=>t.readyState==='live')){entry.tile.remove();remoteSfuStreams.delete(key);syncPresentationStage()}};
   }
@@ -243,7 +243,15 @@ async function liveRoom(classId,guestName=null){
     return meta;
   }
   async function discoverSfuTracks(){
-    if(!sfuMode||!sfu)return;try{const r=await api('/api/live/media/room-tracks',{method:'POST',body:JSON.stringify({class_id:classId,access_token:access.token})});for(const t of r.tracks||[])await sfu.subscribe({sessionId:t.session_id,trackName:t.track_name,kind:t.kind,source:t.source,ownerName:t.owner_name,role:t.role}).catch(()=>{})}catch{}
+    if(!sfuMode||!sfu)return;
+    try{
+      const r=await api('/api/live/media/room-tracks',{method:'POST',body:JSON.stringify({class_id:classId,access_token:access.token})});
+      for(const t of r.tracks||[]){
+        if(t.session_id===sfu.sessionId)continue;
+        try{await sfu.subscribe({sessionId:t.session_id,trackName:t.track_name,kind:t.kind,source:t.source,ownerName:t.owner_name,role:t.role})}
+        catch(e){console.warn('[SLC Live] Không nhận được remote track',t.track_name,e);setNotice('Một luồng âm thanh/hình ảnh chưa kết nối được. Hệ thống sẽ tiếp tục thử.','warn')}
+      }
+    }catch(e){console.warn('[SLC Live] Không đồng bộ được danh sách media',e)}
   }
 
   function updateUI(){
@@ -285,7 +293,8 @@ async function liveRoom(classId,guestName=null){
 
   function myPeerKey(){return selfPeerId||fallbackSelfKey||''}
   function shouldInitiatePeer(id){const me=myPeerKey();return !!me&&!!id&&me<id}
-  async function renegotiate(id,pc,iceRestart=false){if((!wsOnline&&!fallbackActive)||!pc||pc.signalingState!=='stable')return;try{const offer=await pc.createOffer(iceRestart?{iceRestart:true}:undefined);await pc.setLocalDescription(offer);await sendRealtime({type:'offer',to:id,sdp:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}})}catch(e){console.warn('[SLC Live] renegotiate',id,e?.name||e)}}
+  function waitIceComplete(pc,timeout=1800){if(!pc||pc.iceGatheringState==='complete')return Promise.resolve();return new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(timer);pc.removeEventListener('icegatheringstatechange',check);resolve()};const check=()=>{if(pc.iceGatheringState==='complete')finish()};const timer=setTimeout(finish,timeout);pc.addEventListener('icegatheringstatechange',check)})}
+  async function renegotiate(id,pc,iceRestart=false){if((!wsOnline&&!fallbackActive)||!pc||pc.signalingState!=='stable'||pc._sfnMakingOffer)return;pc._sfnMakingOffer=true;try{const offer=await pc.createOffer(iceRestart?{iceRestart:true}:undefined);await pc.setLocalDescription(offer);await waitIceComplete(pc);await sendRealtime({type:'offer',to:id,sdp:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}})}catch(e){console.warn('[SLC Live] renegotiate',id,e?.name||e)}finally{pc._sfnMakingOffer=false}}
   // Use the shared roleLabel() helper. Do not redeclare it inside liveRoom: a local const here creates a TDZ and crashes Live before initialization.
   async function flushPeerIce(id,pc){const q=pendingPeerIce.get(id)||[];pendingPeerIce.delete(id);for(const c of q){try{await pc.addIceCandidate(c)}catch{}}}
   async function addPeerIce(id,candidate){if(!candidate)return;const pc=await ensurePeer(id,false);if(pc.remoteDescription){try{await pc.addIceCandidate(candidate)}catch{}}else{const q=pendingPeerIce.get(id)||[];q.push(candidate);pendingPeerIce.set(id,q)}}
@@ -315,7 +324,9 @@ async function liveRoom(classId,guestName=null){
     const pc=new RTCPeerConnection({iceServers:[{urls:['stun:stun.cloudflare.com:3478','stun:stun.l.google.com:19302']}],bundlePolicy:'max-bundle'});peers.set(id,pc);
     remotePeerStreams.set(id,new MediaStream());
     if(micTrack){const a=pc.addTrack(micTrack,localStream);a._sfnKind='audio'}if(screenTrack||camTrack){const t=screenTrack||camTrack,v=pc.addTrack(t,localStream);v._sfnKind='video'}
-    pc.onicecandidate=e=>{if(e.candidate&&(wsOnline||fallbackActive))sendRealtime({type:'ice',to:id,candidate:e.candidate})};
+    pc.onicecandidate=e=>{if(e.candidate&&(wsOnline||fallbackActive))sendRealtime({type:'ice',to:id,candidate:typeof e.candidate.toJSON==='function'?e.candidate.toJSON():e.candidate})};
+    pc.oniceconnectionstatechange=()=>{if(['failed','disconnected'].includes(pc.iceConnectionState)&&shouldInitiatePeer(id))setTimeout(()=>renegotiate(id,pc,true),500)};
+    pc.onnegotiationneeded=()=>{if(shouldInitiatePeer(id))renegotiate(id,pc)};
     pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected')setNotice(`${peerMeta.get(id)?.name||'Thành viên'} đã kết nối âm thanh/hình ảnh.`,'good');else if(pc.connectionState==='failed'){setNotice(`Kết nối âm thanh/hình ảnh với ${peerMeta.get(id)?.name||'một thành viên'} chưa thiết lập được. Đang thử kết nối lại…`,'warn');try{pc.restartIce?.()}catch{};if(shouldInitiatePeer(id))setTimeout(()=>renegotiate(id,pc,true),250)}else if(pc.connectionState==='disconnected')setNotice(`Kết nối với ${peerMeta.get(id)?.name||'một thành viên'} đang gián đoạn. Hệ thống đang tự khôi phục.`,'warn');else if(pc.connectionState==='closed')removePeer(id)};
     pc.ontrack=e=>{
       const stream=remotePeerStreams.get(id)||new MediaStream();remotePeerStreams.set(id,stream);
@@ -354,10 +365,10 @@ async function liveRoom(classId,guestName=null){
     if(!m||m.from===fallbackSelfKey)return;
     if(m.to&&fallbackSelfKey&&m.to!==fallbackSelfKey)return;
     const consumed=classroomTools?.handleMessage?.(m);if(consumed)return;
-    if(m.type==='offer'&&!sfuMode){const pc=await ensurePeer(m.from,false,{name:m.fromName,role:m.fromRole});if(!pc)return;if(pc.signalingState!=='stable'){try{await pc.setLocalDescription({type:'rollback'})}catch{}}await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc);const ans=await pc.createAnswer();await pc.setLocalDescription(ans);await sendRealtime({type:'answer',to:m.from,sdp:ans})}
+    if(m.type==='offer'&&!sfuMode){const pc=await ensurePeer(m.from,false,{name:m.fromName,role:m.fromRole});if(!pc)return;const collision=pc._sfnMakingOffer||pc.signalingState!=='stable';const polite=!shouldInitiatePeer(m.from);if(collision&&!polite)return;if(collision){try{await pc.setLocalDescription({type:'rollback'})}catch{}}await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc);const ans=await pc.createAnswer();await pc.setLocalDescription(ans);await waitIceComplete(pc);await sendRealtime({type:'answer',to:m.from,sdp:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}})}
     else if(m.type==='answer'&&!sfuMode){try{const pc=await ensurePeer(m.from);if(pc){await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc)}}catch{}}
     else if(m.type==='ice'&&!sfuMode){await addPeerIce(m.from,m.candidate)}
-    else if(sfuMode&&m.type==='media-track-published'){await sfu?.subscribe({sessionId:m.sessionId,trackName:m.trackName,kind:m.kind,source:m.source,ownerName:m.fromName||m.ownerName,role:m.fromRole}).catch(()=>{})}
+    else if(sfuMode&&m.type==='media-track-published'){await sfu?.subscribe({sessionId:m.sessionId,trackName:m.trackName,kind:m.kind,source:m.source,ownerName:m.fromName||m.ownerName,role:m.fromRole}).catch(e=>{console.warn('[SLC Live] subscribe realtime',e);setNotice('Đang kết nối âm thanh/hình ảnh của thành viên…','warn')})}
     else if(sfuMode&&m.type==='media-track-unpublished'){const key=mediaKey(m),entry=remoteSfuStreams.get(key);if(entry){entry.tile?.remove();remoteSfuStreams.delete(key);syncPresentationStage()}}
     else if(m.type==='chat')appendChat(m.fromName||'Thành viên',m.text,false,'fb-'+m.id);
     else if(m.type==='reaction')showReaction(m.emoji||'👏',m.fromName||'Thành viên');
@@ -401,9 +412,9 @@ async function liveRoom(classId,guestName=null){
       else if(m.type==='roster-state'){const incoming=new Map((m.roster||[]).filter(p=>p.id!==m.peerId).map(p=>[p.id,p]));for(const id of [...peerMeta.keys()])if(!incoming.has(id)){peers.get(id)?.close();peers.delete(id);peerMeta.delete(id);document.querySelector(`[data-peer=\"${CSS.escape(id)}\"]`)?.remove()}for(const p of incoming.values())await ensurePeer(p.id,false,p);refreshPeople()}
       else if(m.type==='peer-joined')await ensurePeer(m.peer.id,!sfuMode&&shouldInitiatePeer(m.peer.id),m.peer);
       else if(m.type==='peer-left'){removePeer(m.peerId)}
-      else if(sfuMode&&m.type==='media-track-published'){await sfu?.subscribe({sessionId:m.sessionId,trackName:m.trackName,kind:m.kind,source:m.source,ownerName:m.fromName||m.ownerName,role:m.fromRole}).catch(()=>{})}
+      else if(sfuMode&&m.type==='media-track-published'){await sfu?.subscribe({sessionId:m.sessionId,trackName:m.trackName,kind:m.kind,source:m.source,ownerName:m.fromName||m.ownerName,role:m.fromRole}).catch(e=>{console.warn('[SLC Live] subscribe realtime',e);setNotice('Đang kết nối âm thanh/hình ảnh của thành viên…','warn')})}
       else if(sfuMode&&m.type==='media-track-unpublished'){const key=mediaKey(m),entry=remoteSfuStreams.get(key);if(entry){entry.tile?.remove();remoteSfuStreams.delete(key)}}
-      else if(!sfuMode&&m.type==='offer'){const pc=await ensurePeer(m.from,false,{name:m.fromName,role:m.fromRole});if(pc){if(pc.signalingState!=='stable'){try{await pc.setLocalDescription({type:'rollback'})}catch{}}await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc);const ans=await pc.createAnswer();await pc.setLocalDescription(ans);await sendRealtime({type:'answer',to:m.from,sdp:ans})}}
+      else if(!sfuMode&&m.type==='offer'){const pc=await ensurePeer(m.from,false,{name:m.fromName,role:m.fromRole});if(pc){const collision=pc._sfnMakingOffer||pc.signalingState!=='stable';const polite=!shouldInitiatePeer(m.from);if(collision&&!polite)return;if(collision){try{await pc.setLocalDescription({type:'rollback'})}catch{}}await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc);const ans=await pc.createAnswer();await pc.setLocalDescription(ans);await waitIceComplete(pc);await sendRealtime({type:'answer',to:m.from,sdp:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}})}}
       else if(!sfuMode&&m.type==='answer'){try{const pc=await ensurePeer(m.from);if(pc){await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc)}}catch{}}
       else if(!sfuMode&&m.type==='ice'){await addPeerIce(m.from,m.candidate)}
       else if(m.type==='chat')appendChat(m.fromName||'Thành viên',m.text,false,'ws-'+m.from+'-'+Date.now());

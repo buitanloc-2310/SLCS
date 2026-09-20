@@ -318,7 +318,7 @@ async function liveRoom(classId,guestName=null){
   }
   async function ensurePeer(id,initiator=false,meta={}){
     if(!id||id===selfPeerId||id===fallbackSelfKey)return null;
-    if(peerMeta.has(id))Object.assign(peerMeta.get(id),meta);else peerMeta.set(id,{name:meta.name||'Thành viên',role:meta.role||'student'});refreshPeople();
+    if(peerMeta.has(id))Object.assign(peerMeta.get(id),meta);else peerMeta.set(id,{name:meta.name||'Thành viên',role:meta.role||'student'});ensureParticipantTile(id,peerMeta.get(id));refreshPeople();
     if(sfuMode)return null;
     if(peers.has(id))return peers.get(id)
     const pc=new RTCPeerConnection({iceServers:[{urls:['stun:stun.cloudflare.com:3478','stun:stun.l.google.com:19302']}],bundlePolicy:'max-bundle'});peers.set(id,pc);
@@ -466,7 +466,7 @@ async function liveRoom(classId,guestName=null){
   window.addEventListener('online',()=>{if(!wsOnline&&!closing)connectRealtime().catch(()=>{})},{once:true});
   navigator.mediaDevices?.addEventListener?.('devicechange',enumerateDevices);
 
-  if(sfuMode){try{sfu=new SkyMediaClient({classId,accessToken:access.token,api,onRemoteTrack:attachRemoteSfuTrack,onState:st=>{if(String(st).includes('failed')||String(st).includes('recover')){/* tự phục hồi trong nền */}},maxVideoSubscriptions:Number(classroomData.settings?.max_visible_videos||12)});await sfu.init();/* kết nối media thành công: không hiển thị chi tiết hạ tầng */sfuTrackPoll=setInterval(()=>{if(!document.hidden)discoverSfuTracks()},7000)}catch(e){setNotice('Kết nối hình ảnh và âm thanh chưa sẵn sàng. Hệ thống đang tự khôi phục.','warn')}}
+  if(sfuMode){try{sfu=new SkyMediaClient({classId,accessToken:access.token,api,onRemoteTrack:attachRemoteSfuTrack,onState:st=>{if(String(st).includes('failed')||String(st).includes('recover')){/* tự phục hồi trong nền */}},maxVideoSubscriptions:Number(classroomData.settings?.max_visible_videos||12)});await sfu.init();/* kết nối media thành công: không hiển thị chi tiết hạ tầng */sfuTrackPoll=setInterval(()=>{if(!document.hidden)discoverSfuTracks()},2500)}catch(e){console.error('[SLC Live] Không khởi tạo được media session',e);setNotice('Chưa thiết lập được kết nối hình ảnh và âm thanh. Hãy rời phòng và vào lại.','bad')}}
   updateUI();await enumerateDevices();await loadHttpChat();if(!guestName)chatPoll=setInterval(()=>{if(!wsOnline&&!document.hidden)loadHttpChat()},15000);connectRealtime().catch(()=>{});if(sfuMode&&sfu)discoverSfuTracks();
 }
 
@@ -625,4 +625,13 @@ async function bootstrap(){
     await render();
   }catch(error){showBootstrapError(error)}
 }
+window.addEventListener('error',event=>{
+  if(!event?.error)return;
+  console.error('[SLC runtime]',event.error);
+  if(document.querySelector('#app .startup-shell'))showBootstrapError(event.error);
+});
+window.addEventListener('unhandledrejection',event=>{
+  console.error('[SLC promise]',event.reason);
+  if(document.querySelector('#app .startup-shell'))showBootstrapError(event.reason instanceof Error?event.reason:new Error(String(event.reason||'UNHANDLED_PROMISE')));
+});
 bootstrap();

@@ -1,6 +1,6 @@
 import { LiveRoom } from './live-room.js';
 import { V11_SCHEMA_STAGES } from './schema-v11.js';
-import { realtimeSfuConfig, createRealtimeSession, addRealtimeTracks, renegotiateRealtimeSession, ensureRealtimeSfuSchema } from './realtime-sfu.js';
+import { realtimeSfuConfig, createRealtimeSession, addRealtimeTracks, renegotiateRealtimeSession, closeRealtimeTracks, ensureRealtimeSfuSchema } from './realtime-sfu.js';
 import { ensureV13Schema, getClassLiveSettings, safeJson, logLiveEvent } from './v13-platform.js';
 import { VPLUS, ensureVPlusSchema, recordPlatformEvent, auditAi, aiConfigured, aiProviderConfig, aiSupportsNativeResearch, callAiProvider, testAiAuthentication, aiKeyDiagnostic, buildAiSystemPrompt, hasPermission, requirePermission, safeUserMessage, consumeAiQuota, fetchResearchSources, parseAiAction, moderateAiInput } from './vplus-platform.js';
 export { LiveRoom };
@@ -659,7 +659,7 @@ async function routeApi(request, env, ctx, url) {
   if(path==='/api/live/media/status' && method==='POST'){
     const b=await request.json(); const classId=str(b.class_id); await requireLiveAccess(env,classId,b.access_token);
     const cfg=realtimeSfuConfig(env);
-    return ok({ready:cfg.configured});
+    return ok({configured:cfg.configured,transport:'runtime-handshake'});
   }
 
   if(path==='/api/live/media/session/new' && method==='POST'){
@@ -712,21 +712,33 @@ async function routeApi(request, env, ctx, url) {
     const result=await renegotiateRealtimeSession(env,sessionId,{sessionDescription:{type:str(b.sessionDescription.type),sdp:String(b.sessionDescription.sdp)}}); return ok({...result});
   }
 
+  const sfuHeartbeat=path.match(/^\/api\/live\/media\/session\/([^/]+)\/heartbeat$/);
+  if(sfuHeartbeat && method==='POST'){
+    const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token); const sessionId=sfuHeartbeat[1]; await requireOwnedSfuSession(env,sessionId,classId,access);
+    await env.DB.prepare(`UPDATE live_sfu_sessions SET last_seen=CURRENT_TIMESTAMP WHERE session_id=? AND class_id=? AND owner_key=? AND status='active'`).bind(sessionId,classId,access.owner_key).run(); return ok();
+  }
+
   const sfuUnpublish=path.match(/^\/api\/live\/media\/session\/([^/]+)\/unpublish$/);
   if(sfuUnpublish && method==='POST'){
     const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token); const sessionId=sfuUnpublish[1]; await requireOwnedSfuSession(env,sessionId,classId,access);
-    const name=str(b.track_name); await env.DB.prepare(`UPDATE live_sfu_tracks SET active=0,updated_at=CURRENT_TIMESTAMP WHERE class_id=? AND session_id=? AND track_name=? AND owner_key=?`).bind(classId,sessionId,name,access.owner_key).run(); return ok();
+    const name=str(b.track_name); const row=await env.DB.prepare(`SELECT track_name,mid FROM live_sfu_tracks WHERE class_id=? AND session_id=? AND track_name=? AND owner_key=? AND active=1 LIMIT 1`).bind(classId,sessionId,name,access.owner_key).first();
+    if(row){try{await closeRealtimeTracks(env,sessionId,[{trackName:row.track_name,mid:row.mid}])}catch(e){console.warn('[live media] close track failed',e?.code||e?.message||e)}}
+    await env.DB.prepare(`UPDATE live_sfu_tracks SET active=0,updated_at=CURRENT_TIMESTAMP WHERE class_id=? AND session_id=? AND track_name=? AND owner_key=?`).bind(classId,sessionId,name,access.owner_key).run(); return ok();
   }
 
   const sfuEnd=path.match(/^\/api\/live\/media\/session\/([^/]+)\/end$/);
   if(sfuEnd && method==='POST'){
     const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token); const sessionId=sfuEnd[1]; await requireOwnedSfuSession(env,sessionId,classId,access);
+    const active=await env.DB.prepare(`SELECT track_name,mid FROM live_sfu_tracks WHERE session_id=? AND active=1`).bind(sessionId).all();
+    if(active.results?.length){try{await closeRealtimeTracks(env,sessionId,active.results.map(x=>({trackName:x.track_name,mid:x.mid})))}catch(e){console.warn('[live media] close session tracks failed',e?.code||e?.message||e)}}
     await env.DB.batch([env.DB.prepare(`UPDATE live_sfu_sessions SET status='ended',ended_at=CURRENT_TIMESTAMP,last_seen=CURRENT_TIMESTAMP WHERE session_id=?`).bind(sessionId),env.DB.prepare(`UPDATE live_sfu_tracks SET active=0,updated_at=CURRENT_TIMESTAMP WHERE session_id=?`).bind(sessionId)]); return ok();
   }
 
   if(path==='/api/live/media/room-tracks' && method==='POST'){
     const b=await request.json(); const classId=str(b.class_id); await requireLiveAccess(env,classId,b.access_token); await ensureRealtimeSfuSchema(env);
-    const rows=await env.DB.prepare(`SELECT t.session_id,t.track_name,t.mid,t.kind,t.source,t.owner_name,t.role,t.updated_at FROM live_sfu_tracks t JOIN live_sfu_sessions s ON s.session_id=t.session_id WHERE t.class_id=? AND t.active=1 AND s.status='active' AND datetime(s.last_seen)>datetime('now','-18 hours') ORDER BY t.updated_at DESC LIMIT 500`).bind(classId).all(); return ok({tracks:rows.results||[]});
+    const excludeSessionId=str(b.exclude_session_id);
+    const sql=`SELECT t.session_id,t.track_name,t.mid,t.kind,t.source,t.owner_name,t.role,t.updated_at FROM live_sfu_tracks t JOIN live_sfu_sessions s ON s.session_id=t.session_id WHERE t.class_id=? AND t.active=1 AND s.status='active' ${excludeSessionId?'AND t.session_id!=? ':''}AND datetime(s.last_seen)>datetime('now','-30 seconds') ORDER BY t.updated_at DESC LIMIT 500`;
+    const stmt=env.DB.prepare(sql); const rows=excludeSessionId?await stmt.bind(classId,excludeSessionId).all():await stmt.bind(classId).all(); return ok({tracks:rows.results||[]});
   }
 
   if(path==='/api/support/tickets' && method==='GET'){
@@ -778,7 +790,7 @@ async function routeApi(request, env, ctx, url) {
     return ok({settings:Object.fromEntries(allowed.filter(k=>Object.prototype.hasOwnProperty.call(all,k)).map(k=>[k,all[k]]))});
   }
   if(path==='/api/admin/settings' && method==='PUT'){
-    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const allowed=['live_room_max_participants','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_hero_eyebrow','public_hero_side_title','public_hero_side_text','public_feature_1_title','public_feature_1_text','public_feature_2_title','public_feature_2_text','public_feature_3_title','public_feature_3_text','public_feature_4_title','public_feature_4_text','public_learner_title','public_learner_text','public_learner_quote','public_teacher_title','public_teacher_text','public_teacher_before_title','public_teacher_before_text','public_teacher_during_title','public_teacher_during_text','public_teacher_after_title','public_teacher_after_text','public_safety_title','public_safety_text','public_faq_title','public_faq_1_q','public_faq_1_a','public_faq_2_q','public_faq_2_a','public_faq_3_q','public_faq_3_a','public_faq_4_q','public_faq_4_a','public_cta_title','public_cta_text','public_status_text']; const statements=[];
+    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const allowed=['live_room_max_participants','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_hero_eyebrow','public_hero_side_title','public_hero_side_text','public_feature_1_title','public_feature_1_text','public_feature_2_title','public_feature_2_text','public_feature_3_title','public_feature_3_text','public_feature_4_title','public_feature_4_text','public_learner_title','public_learner_text','public_learner_quote','public_teacher_title','public_teacher_text','public_teacher_before_title','public_teacher_before_text','public_teacher_during_title','public_teacher_during_text','public_teacher_after_title','public_teacher_after_text','public_safety_title','public_safety_text','public_faq_title','public_faq_1_q','public_faq_1_a','public_faq_2_q','public_faq_2_a','public_faq_3_q','public_faq_3_a','public_faq_4_q','public_faq_4_a','public_cta_title','public_cta_text','public_status_text','beauty_enabled','beauty_allow_users','beauty_smooth_default','beauty_brightness_default','beauty_contrast_default','beauty_background_enabled','beauty_advanced_admin_enabled']; const statements=[];
     for(const key of allowed){if(Object.prototype.hasOwnProperty.call(b,key))statements.push(env.DB.prepare(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(key,str(b[key]),admin.user_id));}
     if(statements.length)await env.DB.batch(statements); await adminLog(env,admin.user_id,'settings.update',{keys:statements.length}); return ok({settings:await getSettings(env)});
   }

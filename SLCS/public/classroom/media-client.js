@@ -3,7 +3,7 @@ export class SkyMediaClient {
     this.classId=classId; this.accessToken=accessToken; this.api=api; this.onRemoteTrack=onRemoteTrack; this.onState=onState;
     this.sessionId=''; this.pc=null; this.published=new Map(); this.subscribed=new Set(); this.subscribing=new Set();
     this.queue=Promise.resolve(); this.closed=false; this.maxVideoSubscriptions=Math.max(2,Math.min(24,Number(maxVideoSubscriptions||12)));
-    this.videoSubscriptions=new Set(); this.recovering=false; this.remoteMetaByMid=new Map(); this.remoteWaitersByMid=new Map();
+    this.videoSubscriptions=new Set(); this.recovering=false; this.remoteMetaByMid=new Map(); this.remoteWaitersByMid=new Map(); this.remoteStreamsBySession=new Map();
   }
   _serial(fn){const next=this.queue.then(fn,fn);this.queue=next.catch(()=>{});return next}
   _waitForConnected(timeoutMs=8000){
@@ -23,7 +23,37 @@ export class SkyMediaClient {
     this.pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.cloudflare.com:3478'}],bundlePolicy:'max-bundle'});
     this.pc.addEventListener('connectionstatechange',()=>{this.onState(this.pc.connectionState);if(this.pc.connectionState==='failed')this.recoverIce()});
     this.pc.addEventListener('iceconnectionstatechange',()=>this.onState(`ice:${this.pc.iceConnectionState}`));
-    this.pc.addEventListener('track',event=>{const mid=event.transceiver?.mid!=null?String(event.transceiver.mid):'';const meta=this.remoteMetaByMid.get(mid)||{};const waiter=this.remoteWaitersByMid.get(mid);if(waiter)waiter.resolve(event.track);this.onRemoteTrack(event.track,meta,event.streams?.[0]||null)});
+    this.pc.addEventListener('track',event=>{
+      const track=event.track;
+      const mid=event.transceiver?.mid!=null?String(event.transceiver.mid):'';
+      let meta=this.remoteMetaByMid.get(mid)||null;
+      // Cloudflare normally returns the receiver MID used in the subsequent offer.
+      // If a browser/SFU remaps it, only fall back when there is exactly one unresolved
+      // subscription of the same media kind. Never guess between multiple participants.
+      if(!meta){
+        const candidates=[...this.remoteMetaByMid.entries()].filter(([candidateMid,candidate])=>{
+          if(this.remoteWaitersByMid.get(candidateMid)==null)return false;
+          return !candidate?.kind||candidate.kind===track.kind;
+        });
+        if(candidates.length===1){
+          const [mappedMid,mappedMeta]=candidates[0];
+          meta=mappedMeta;
+          if(mid&&mid!==mappedMid){
+            this.remoteMetaByMid.set(mid,{...mappedMeta,mid});
+            console.warn('[P0][MID_REMAP]',{expectedMid:mappedMid,actualMid:mid,trackId:track.id,kind:track.kind});
+          }
+        }
+      }
+      meta=meta||{};
+      const sessionKey=String(meta.sessionId||mid||track.id||'remote');
+      let stream=this.remoteStreamsBySession.get(sessionKey);
+      if(!stream){stream=new MediaStream();this.remoteStreamsBySession.set(sessionKey,stream)}
+      if(!stream.getTracks().some(t=>t.id===track.id))stream.addTrack(track);
+      const waiter=this.remoteWaitersByMid.get(mid)||([...this.remoteWaitersByMid.entries()].find(([candidateMid])=>this.remoteMetaByMid.get(candidateMid)?.sessionId===meta.sessionId&&this.remoteMetaByMid.get(candidateMid)?.trackName===meta.trackName)?.[1]);
+      if(waiter)waiter.resolve(track);
+      console.log('[P0][ONTRACK]',{mid,trackId:track.id,kind:track.kind,readyState:track.readyState,muted:track.muted,sessionId:meta.sessionId||'UNKNOWN',trackName:meta.trackName||'UNKNOWN'});
+      this.onRemoteTrack(track,meta,stream);
+    });
     return this;
   }
   async publishTrack(track,source='camera'){
@@ -43,6 +73,7 @@ export class SkyMediaClient {
     })
   }
   async setPublishedEnabled(source,enabled){const item=this.published.get(source);if(!item?.track)return false;item.track.enabled=!!enabled;return true}
+  async heartbeat(){if(this.closed||!this.sessionId)return false;await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/heartbeat`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})});return true}
   async unpublish(source){const item=this.published.get(source);if(!item)return;try{await item.sender.replaceTrack(null)}catch{};this.published.delete(source);try{await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/unpublish`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,track_name:item.meta.trackName})})}catch{}}
   async subscribe(meta){
     if(!meta?.sessionId||!meta?.trackName||meta.sessionId===this.sessionId)return;const key=`${meta.sessionId}:${meta.trackName}`;
@@ -50,11 +81,15 @@ export class SkyMediaClient {
     this.subscribing.add(key);
     try{await this.init();await this._serial(async()=>{
       const result=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/tracks`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,operation:'subscribe',tracks:[{location:'remote',sessionId:meta.sessionId,trackName:meta.trackName}]})});
+      console.log('[P0][SUBSCRIBE_REQUEST]',{localSessionId:this.sessionId,remoteSessionId:meta.sessionId,trackName:meta.trackName,kind:meta.kind,source:meta.source});
       const pulled=result.tracks||[];if(!pulled.length)throw new Error('MEDIA_SUBSCRIBE_TRACK_MISSING');
-      const waits=[];for(const t of pulled){if(t.mid==null)throw new Error('MEDIA_SUBSCRIBE_MID_MISSING');const mid=String(t.mid);this.remoteMetaByMid.set(mid,{...meta,mid});waits.push(this._waitForRemoteMid(mid))}
+      console.log('[P0][SUBSCRIBE_RESPONSE]',{tracks:pulled,requiresImmediateRenegotiation:!!result.requiresImmediateRenegotiation,sdpType:result.sessionDescription?.type||''});
+      // Populate all MID metadata synchronously before setRemoteDescription(). setRemoteDescription
+      // is the point at which the browser may dispatch `track` events.
+      const waits=[];for(const t of pulled){if(t.mid==null)throw new Error('MEDIA_SUBSCRIBE_MID_MISSING');const mid=String(t.mid);const mapped={...meta,sessionId:t.sessionId||t.session_id||meta.sessionId,trackName:t.trackName||t.track_name||meta.trackName,kind:t.kind||meta.kind,source:t.source||meta.source,ownerName:t.ownerName||t.owner_name||meta.ownerName,mid};this.remoteMetaByMid.set(mid,mapped);waits.push(this._waitForRemoteMid(mid));console.log('[P0][MID_MAPPED]',{mid,sessionId:mapped.sessionId,trackName:mapped.trackName,kind:mapped.kind,source:mapped.source})}
       if(result.requiresImmediateRenegotiation||result.sessionDescription?.type==='offer'){
         if(result.sessionDescription?.type!=='offer'||!result.sessionDescription?.sdp)throw new Error('MEDIA_SUBSCRIBE_OFFER_MISSING');
-        await this.pc.setRemoteDescription(result.sessionDescription);const answer=await this.pc.createAnswer();await this.pc.setLocalDescription(answer);
+        await this.pc.setRemoteDescription(result.sessionDescription);console.log('[P0][REMOTE_DESCRIPTION]',{signalingState:this.pc.signalingState});const answer=await this.pc.createAnswer();await this.pc.setLocalDescription(answer);console.log('[P0][LOCAL_ANSWER]',{signalingState:this.pc.signalingState});
         const rr=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`,{method:'PUT',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,sessionDescription:{type:'answer',sdp:answer.sdp}})});if(rr?.errorCode)throw new Error(rr.errorDescription||'MEDIA_RENEGOTIATE_FAILED');
       } else if(result.sessionDescription?.type==='answer'&&this.pc.signalingState==='have-local-offer') await this.pc.setRemoteDescription(result.sessionDescription);
       await this._waitForConnected();await Promise.all(waits);
@@ -63,5 +98,5 @@ export class SkyMediaClient {
   }
   setAdaptiveLimit(limit=12){this.maxVideoSubscriptions=Math.max(2,Math.min(24,Number(limit||12)))}
   async recoverIce(){if(this.closed||this.recovering||!this.pc||!this.sessionId)return;this.recovering=true;try{this.onState('recovering');this.pc.restartIce?.();const offer=await this.pc.createOffer({iceRestart:true});await this.pc.setLocalDescription(offer);const result=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`,{method:'PUT',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,sessionDescription:{type:'offer',sdp:offer.sdp}})});if(result?.sessionDescription?.sdp)await this.pc.setRemoteDescription(result.sessionDescription);await this._waitForConnected();this.onState('recovered')}catch(e){this.onState(`recover-failed:${e?.message||'unknown'}`)}finally{setTimeout(()=>{this.recovering=false},1800)}}
-  async close(){if(this.closed)return;this.closed=true;try{this.pc?.close()}catch{};if(this.sessionId){try{await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/end`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})})}catch{}}}
+  async close({keepalive=false}={}){if(this.closed)return;this.closed=true;this.remoteStreamsBySession.clear();try{this.pc?.close()}catch{};if(this.sessionId){try{if(keepalive){fetch(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/end`,{method:'POST',credentials:'include',keepalive:true,headers:{'content-type':'application/json'},body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})}).catch(()=>{})}else await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/end`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})})}catch{}}}
 }

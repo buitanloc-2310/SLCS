@@ -141,28 +141,12 @@ function activationEmail(env,{fullName,sfnId,activationUrl}){
   return emailShell({title:'Tài khoản SFN của bạn đã được phê duyệt',preheader:`SFN ID: ${sfnId}`,body,env});
 }
 async function writeEmailLog(env,{to,subject,status,providerId='',error=''}){try{await env.DB.prepare(`INSERT INTO email_logs(id,to_email,subject,status,provider_message_id,error,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),to,subject,status,providerId,error).run()}catch{}}
-function mailConfig(env){
-  return {
-    key:String(env.RESEND_API_KEY||env.RESEND_KEY||env.RESEND_TOKEN||'').trim(),
-    from:String(env.MAIL_FROM||'Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>').trim(),
-    replyTo:String(env.MAIL_REPLY_TO||env.SUPPORT_EMAIL||'support@skyfirst.io.vn').trim()
-  };
-}
-function publicMailFailure(code='EMAIL_PROVIDER_ERROR'){
-  return ({RESEND_API_KEY_NOT_CONFIGURED:'Dịch vụ email chưa được cấu hình.',EMAIL_TIMEOUT:'Dịch vụ email phản hồi quá chậm.',EMAIL_PROVIDER_REJECTED:'Nhà cung cấp email chưa chấp nhận thư.',EMAIL_NETWORK_ERROR:'Chưa thể kết nối dịch vụ email.'})[code]||'Email chưa gửi được.';
-}
 async function sendMail(env,to,subject,html){
-  const cfg=mailConfig(env);
-  if(!cfg.key){await writeEmailLog(env,{to,subject,status:'skipped',error:'RESEND_API_KEY_NOT_CONFIGURED'});return {sent:false,code:'RESEND_API_KEY_NOT_CONFIGURED',reason:publicMailFailure('RESEND_API_KEY_NOT_CONFIGURED')};}
-  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),15000);
-  try{
-    const payload={from:cfg.from,to:[to],subject,html}; if(cfg.replyTo)payload.reply_to=cfg.replyTo;
-    const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{authorization:`Bearer ${cfg.key}`,'content-type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});
-    const raw=await r.text(); let data={}; try{data=raw?JSON.parse(raw):{}}catch{}
-    if(!r.ok){const detail=`HTTP ${r.status} ${String(data?.name||data?.message||raw||'provider rejected').slice(0,900)}`;await writeEmailLog(env,{to,subject,status:'failed',error:detail});return {sent:false,code:'EMAIL_PROVIDER_REJECTED',provider_status:r.status,reason:publicMailFailure('EMAIL_PROVIDER_REJECTED')};}
-    await writeEmailLog(env,{to,subject,status:'sent',providerId:data.id||''});return {sent:true,data};
-  }catch(error){const code=error?.name==='AbortError'?'EMAIL_TIMEOUT':'EMAIL_NETWORK_ERROR';await writeEmailLog(env,{to,subject,status:'failed',error:`${code}: ${String(error?.message||error).slice(0,900)}`});return {sent:false,code,reason:publicMailFailure(code)};
-  }finally{clearTimeout(timer)}
+  const resendKey=String(env.RESEND_API_KEY||env.RESEND_KEY||env.RESEND_TOKEN||'').trim();
+  if(!resendKey){await writeEmailLog(env,{to,subject,status:'skipped',error:'RESEND_API_KEY_NOT_CONFIGURED'});return {sent:false,reason:'RESEND_API_KEY_NOT_CONFIGURED'};}
+  const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{authorization:`Bearer ${resendKey}`,'content-type':'application/json'},body:JSON.stringify({from:env.MAIL_FROM||'Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>',to:[to],subject,html})});
+  if(!r.ok){const reason=await r.text();await writeEmailLog(env,{to,subject,status:'failed',error:reason});return {sent:false,reason};}
+  const data=await r.json();await writeEmailLog(env,{to,subject,status:'sent',providerId:data.id||''});return {sent:true,data};
 }
 
 
@@ -333,10 +317,6 @@ async function routeApi(request, env, ctx, url) {
     if (!fullName || !email || !phone) return bad('Vui lòng nhập đầy đủ họ tên, email và số điện thoại.');
     if(!validEmail(email)) return bad('Địa chỉ email không hợp lệ.');
     if(fullName.length>160||phone.length>40) return bad('Thông tin cá nhân vượt quá độ dài cho phép.');
-    const normalizedPhone=phone.replace(/[^0-9+]/g,'');
-    if(normalizedPhone.replace(/\D/g,'').length<9) return bad('Số điện thoại chưa hợp lệ.');
-    const existingUser=await env.DB.prepare(`SELECT sfn_id,status FROM users WHERE lower(email)=lower(?) LIMIT 1`).bind(email).first();
-    if(existingUser) return bad(existingUser.status==='active'?`Email này đã có tài khoản ${existingUser.sfn_id}. Vui lòng đăng nhập thay vì gửi yêu cầu mới.`:`Email này đã được cấp tài khoản ${existingUser.sfn_id} và đang ở trạng thái chờ kích hoạt hoặc tạm ngưng. Vui lòng liên hệ bộ phận phụ trách.`,409,{sfn_id:existingUser.sfn_id,status:existingUser.status});
     const portrait = form.get('portrait');
     const studentCard = form.get('student_card');
     if (!(portrait instanceof File) || !portrait.size) return bad('Ảnh chân dung là bắt buộc.');
@@ -351,7 +331,7 @@ async function routeApi(request, env, ctx, url) {
       birth_date:str(form.get('birth_date')), gender:str(form.get('gender')), province:str(form.get('province')),
       education_unit_type:str(form.get('education_unit_type')), education_unit:str(form.get('education_unit')), faculty:str(form.get('faculty')),
       major:str(form.get('major')), class_name:str(form.get('class_name')), student_code:str(form.get('student_code')), academic_year:str(form.get('academic_year')),
-      sfn_unit:str(form.get('sfn_unit')), sfn_role:str(form.get('sfn_role')), purpose:str(form.get('purpose')), requested_access:['student','teacher'].includes(str(form.get('requested_access')))?str(form.get('requested_access')):'student',
+      sfn_unit:str(form.get('sfn_unit')), sfn_role:str(form.get('sfn_role')), purpose:str(form.get('purpose')), requested_access:str(form.get('requested_access')),
       referral:str(form.get('referral')), notes:str(form.get('notes'))
     };
     await env.DB.prepare(`INSERT INTO account_requests(request_code,full_name,email,phone,data_json,portrait_key,student_card_key,status,created_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`)
@@ -410,9 +390,8 @@ async function routeApi(request, env, ctx, url) {
   if (path === '/api/auth/activate' && method === 'POST') {
     const body=await request.json(); const token=str(body.token), password=str(body.password);
     if(password.length<10) return bad('Mật khẩu phải có ít nhất 10 ký tự.');
-    const row=await env.DB.prepare(`SELECT a.*,u.status user_status FROM activation_tokens a JOIN users u ON u.id=a.user_id WHERE a.token=? AND a.used_at IS NULL AND a.expires_at>CURRENT_TIMESTAMP`).bind(token).first();
+    const row=await env.DB.prepare(`SELECT * FROM activation_tokens WHERE token=? AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP`).bind(token).first();
     if(!row) return bad('Liên kết kích hoạt không hợp lệ hoặc đã hết hạn.');
-    if(['disabled','suspended'].includes(row.user_status)) return bad('Tài khoản hiện đang tạm ngưng. Vui lòng liên hệ bộ phận phụ trách.',403);
     const hp=await hashPassword(password);
     await env.DB.batch([
       env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,row.user_id),
@@ -758,7 +737,7 @@ async function routeApi(request, env, ctx, url) {
   if(path==='/api/live/media/room-tracks' && method==='POST'){
     const b=await request.json(); const classId=str(b.class_id); await requireLiveAccess(env,classId,b.access_token); await ensureRealtimeSfuSchema(env);
     const excludeSessionId=str(b.exclude_session_id);
-    const sql=`SELECT t.session_id,t.track_name,t.mid,t.kind,t.source,t.owner_key,t.owner_name,t.role,t.updated_at FROM live_sfu_tracks t JOIN live_sfu_sessions s ON s.session_id=t.session_id WHERE t.class_id=? AND t.active=1 AND s.status='active' ${excludeSessionId?'AND t.session_id!=? ':''}AND datetime(s.last_seen)>datetime('now','-30 seconds') ORDER BY t.updated_at DESC LIMIT 500`;
+    const sql=`SELECT t.session_id,t.track_name,t.mid,t.kind,t.source,t.owner_name,t.role,t.updated_at FROM live_sfu_tracks t JOIN live_sfu_sessions s ON s.session_id=t.session_id WHERE t.class_id=? AND t.active=1 AND s.status='active' ${excludeSessionId?'AND t.session_id!=? ':''}AND datetime(s.last_seen)>datetime('now','-30 seconds') ORDER BY t.updated_at DESC LIMIT 500`;
     const stmt=env.DB.prepare(sql); const rows=excludeSessionId?await stmt.bind(classId,excludeSessionId).all():await stmt.bind(classId).all(); return ok({tracks:rows.results||[]});
   }
 
@@ -782,8 +761,8 @@ async function routeApi(request, env, ctx, url) {
     const admin=await requireRole(request,env,['super_admin']); const b=await request.json();
     const current=await env.DB.prepare(`SELECT id,role,status FROM users WHERE id=?`).bind(adminUser[1]).first(); if(!current)return bad('Không tìm thấy tài khoản.',404);
     const role=['super_admin','school_admin','account_admin','teacher','assistant','student'].includes(b.role)?b.role:current.role;
-    const status=['active','suspended','disabled','pending_activation'].includes(b.status)?b.status:current.status;
-    if(current.id===admin.user_id && (status!=='active'||role!=='super_admin')) return bad('Không thể tự hạ quyền hoặc tạm ngưng tài khoản quản trị đang đăng nhập.');
+    const status=['active','disabled','pending_activation'].includes(b.status)?b.status:current.status;
+    if(current.id===admin.user_id && status!=='active') return bad('Không thể tự vô hiệu hóa tài khoản đang đăng nhập.');
     await env.DB.prepare(`UPDATE users SET role=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(role,status,current.id).run(); await adminLog(env,admin.user_id,'user.update',{user_id:current.id,role,status}); return ok();
   }
 
@@ -804,14 +783,6 @@ async function routeApi(request, env, ctx, url) {
     const admin=await requireRole(request,env,['super_admin','school_admin']); const b=await request.json(); const status=['new','in_progress','waiting_user','resolved','closed'].includes(b.status)?b.status:null; if(!status)return bad('Trạng thái ticket không hợp lệ.'); await env.DB.prepare(`UPDATE support_tickets SET status=?,assigned_to=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(status,admin.user_id,adminTicket[1]).run(); await adminLog(env,admin.user_id,'ticket.status',{ticket_id:adminTicket[1],status}); return ok();
   }
 
-
-  if(path==='/api/beauty/me' && method==='GET'){
-    const u=await requireUser(request,env); const settings=await getSettings(env);
-    const ownerId=str(env.BEAUTY_OWNER_USER_ID||settings.beauty_owner_user_id||'bca18603-3eef-42cb-ba29-7c71d1d245c1');
-    const allowed=!!ownerId&&String(u.user_id)===ownerId;
-    return ok({allowed,enabled:allowed&&settings.beauty_enabled!=='0',config:allowed?{smooth:Number(settings.beauty_smooth_default||0.20),brightness:Number(settings.beauty_brightness_default||0.10),contrast:Number(settings.beauty_contrast_default||0.05),background:settings.beauty_background_enabled!=='0'}:{}});
-  }
-
   if(path==='/api/admin/settings' && method==='GET'){
     const admin=await requireRole(request,env,['super_admin','school_admin']); const all=await getSettings(env);
     if(admin.role==='super_admin') return ok({settings:all});
@@ -819,7 +790,7 @@ async function routeApi(request, env, ctx, url) {
     return ok({settings:Object.fromEntries(allowed.filter(k=>Object.prototype.hasOwnProperty.call(all,k)).map(k=>[k,all[k]]))});
   }
   if(path==='/api/admin/settings' && method==='PUT'){
-    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const allowed=['live_room_max_participants','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_hero_eyebrow','public_hero_side_title','public_hero_side_text','public_feature_1_title','public_feature_1_text','public_feature_2_title','public_feature_2_text','public_feature_3_title','public_feature_3_text','public_feature_4_title','public_feature_4_text','public_learner_title','public_learner_text','public_learner_quote','public_teacher_title','public_teacher_text','public_teacher_before_title','public_teacher_before_text','public_teacher_during_title','public_teacher_during_text','public_teacher_after_title','public_teacher_after_text','public_safety_title','public_safety_text','public_faq_title','public_faq_1_q','public_faq_1_a','public_faq_2_q','public_faq_2_a','public_faq_3_q','public_faq_3_a','public_faq_4_q','public_faq_4_a','public_cta_title','public_cta_text','public_status_text','beauty_enabled','beauty_owner_user_id','beauty_smooth_default','beauty_brightness_default','beauty_contrast_default','beauty_background_enabled','beauty_advanced_admin_enabled']; const statements=[];
+    const admin=await requireRole(request,env,['super_admin']); const b=await request.json(); const allowed=['live_room_max_participants','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_hero_eyebrow','public_hero_side_title','public_hero_side_text','public_feature_1_title','public_feature_1_text','public_feature_2_title','public_feature_2_text','public_feature_3_title','public_feature_3_text','public_feature_4_title','public_feature_4_text','public_learner_title','public_learner_text','public_learner_quote','public_teacher_title','public_teacher_text','public_teacher_before_title','public_teacher_before_text','public_teacher_during_title','public_teacher_during_text','public_teacher_after_title','public_teacher_after_text','public_safety_title','public_safety_text','public_faq_title','public_faq_1_q','public_faq_1_a','public_faq_2_q','public_faq_2_a','public_faq_3_q','public_faq_3_a','public_faq_4_q','public_faq_4_a','public_cta_title','public_cta_text','public_status_text','beauty_enabled','beauty_allow_users','beauty_smooth_default','beauty_brightness_default','beauty_contrast_default','beauty_background_enabled','beauty_advanced_admin_enabled']; const statements=[];
     for(const key of allowed){if(Object.prototype.hasOwnProperty.call(b,key))statements.push(env.DB.prepare(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(key,str(b[key]),admin.user_id));}
     if(statements.length)await env.DB.batch(statements); await adminLog(env,admin.user_id,'settings.update',{keys:statements.length}); return ok({settings:await getSettings(env)});
   }
@@ -840,7 +811,7 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if(path==='/api/admin/account-requests' && method==='GET'){
-    await requireRole(request,env,['super_admin','account_admin']); const rows=await env.DB.prepare(`SELECT r.*,u.sfn_id approved_sfn_id,(SELECT COUNT(*) FROM admin_notes n WHERE n.entity_type='account_request' AND n.entity_id=CAST(r.id AS TEXT)) note_count FROM account_requests r LEFT JOIN users u ON u.id=r.approved_user_id ORDER BY r.created_at DESC LIMIT 200`).all(); return ok({requests:(rows.results||[]).map(r=>{let data={};try{data=JSON.parse(r.data_json||'{}')}catch{}return {...r,requested_access:data.requested_access||'student',education_unit:data.education_unit||'',class_name:data.class_name||''}})});
+    await requireRole(request,env,['super_admin','account_admin']); const rows=await env.DB.prepare(`SELECT * FROM account_requests ORDER BY created_at DESC LIMIT 200`).all(); return ok({requests:rows.results});
   }
 
   const approve=path.match(/^\/api\/admin\/account-requests\/([^/]+)\/approve$/);
@@ -869,7 +840,6 @@ async function routeApi(request, env, ctx, url) {
     if(!['needs_info','rejected','reviewing'].includes(action)) return bad('Thao tác xử lý không hợp lệ.');
     const row=await env.DB.prepare(`SELECT * FROM account_requests WHERE id=?`).bind(accountReview[1]).first();
     if(!row) return bad('Không tìm thấy yêu cầu.',404);
-    if(['approved','rejected'].includes(row.status)) return bad('Yêu cầu này đã được xử lý và không thể chuyển lại bằng thao tác này.',409);
     await env.DB.batch([
       env.DB.prepare(`UPDATE account_requests SET status=?,reviewed_by=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=?`).bind(action,admin.user_id,row.id),
       env.DB.prepare(`INSERT INTO admin_notes(id,entity_type,entity_id,note,created_by,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),'account_request',String(row.id),note||action,admin.user_id)
@@ -881,29 +851,10 @@ async function routeApi(request, env, ctx, url) {
     return ok({status:action});
   }
 
-  const resendRequestMail=path.match(/^\/api\/admin\/account-requests\/([^/]+)\/resend-email$/);
-  if(resendRequestMail && method==='POST'){
-    const admin=await requireRole(request,env,['super_admin','account_admin']);
-    const row=await env.DB.prepare(`SELECT r.*,u.sfn_id approved_sfn_id,u.id approved_user_id FROM account_requests r LEFT JOIN users u ON u.id=r.approved_user_id WHERE r.id=?`).bind(resendRequestMail[1]).first();
-    if(!row)return bad('Không tìm thấy yêu cầu.',404);
-    let mail;
-    if(row.status==='approved' && row.approved_user_id){
-      const token=randomToken(24), expires=new Date(Date.now()+7*86400000).toISOString();
-      await env.DB.batch([env.DB.prepare(`UPDATE activation_tokens SET used_at=CURRENT_TIMESTAMP WHERE user_id=? AND used_at IS NULL`).bind(row.approved_user_id),env.DB.prepare(`INSERT INTO activation_tokens(token,user_id,expires_at,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)`).bind(token,row.approved_user_id,expires)]);
-      const activationUrl=`${env.APP_URL}/#activate/${token}`; const fallback=activationEmail(env,{fullName:row.full_name,sfnId:row.approved_sfn_id,activationUrl}); const tpl=await resolveEmailTemplate(env,'account_approved',`[Sky First] Kích hoạt tài khoản ${row.approved_sfn_id}`,fallback,{full_name:row.full_name,sfn_id:row.approved_sfn_id,activation_url:activationUrl}); mail=await sendMail(env,row.email,tpl.subject,tpl.html);
-    }else{
-      let data={};try{data=JSON.parse(row.data_json||'{}')}catch{} const fallback=requestReceivedEmail(env,{fullName:row.full_name,requestCode:row.request_code,email:row.email,phone:row.phone,data}); const tpl=await resolveEmailTemplate(env,'account_request_received','[Sky First] Xác nhận tiếp nhận yêu cầu cấp tài khoản',fallback,{full_name:row.full_name,request_code:row.request_code,email:row.email,phone:row.phone}); mail=await sendMail(env,row.email,tpl.subject,tpl.html);
-    }
-    await adminLog(env,admin.user_id,'account_request.resend_email',{id:row.id,sent:mail.sent,code:mail.code||''});
-    return ok({sent:mail.sent,reason:mail.reason||'',code:mail.code||''});
-  }
-
   if(path==='/api/admin/users/create' && method==='POST'){
     const admin=await requireRole(request,env,['super_admin','account_admin']); const b=await request.json();
     const fullName=str(b.full_name), email=normalizeEmail(str(b.email)), phone=str(b.phone), role=['teacher','assistant','student','account_admin','school_admin'].includes(b.role)?b.role:'student';
     if(!fullName||!email) return bad('Họ tên và email là bắt buộc.');
-    if(!validEmail(email)) return bad('Địa chỉ email không hợp lệ.');
-    if(fullName.length>160||phone.length>40) return bad('Thông tin tài khoản vượt quá độ dài cho phép.');
     if(await env.DB.prepare(`SELECT 1 ok FROM users WHERE lower(email)=lower(?)`).bind(email).first()) return bad('Email đã có tài khoản.',409);
     const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first(); if(!seq)return bad('Đã đạt giới hạn tài khoản.',409);
     const no=Number(seq.value), id=crypto.randomUUID(), token=randomToken(24), expires=new Date(Date.now()+7*86400000).toISOString();
@@ -921,8 +872,6 @@ async function routeApi(request, env, ctx, url) {
     for(const item of items){
       const fullName=str(item.full_name), email=normalizeEmail(str(item.email)), phone=str(item.phone), role=['teacher','assistant','student'].includes(item.role)?item.role:'student';
       if(!fullName||!email){results.push({email,status:'error',message:'Thiếu họ tên/email'});continue;}
-      if(!validEmail(email)){results.push({email,status:'error',message:'Email không hợp lệ'});continue;}
-      if(fullName.length>160||phone.length>40){results.push({email,status:'error',message:'Thông tin vượt quá độ dài cho phép'});continue;}
       if(await env.DB.prepare(`SELECT 1 ok FROM users WHERE lower(email)=lower(?)`).bind(email).first()){results.push({email,status:'skip',message:'Email đã tồn tại'});continue;}
       const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first(); if(!seq){results.push({email,status:'error',message:'Đạt giới hạn tài khoản'});break;}
       const no=Number(seq.value), id=crypto.randomUUID(), token=randomToken(24), expires=new Date(Date.now()+7*86400000).toISOString();
@@ -1159,14 +1108,14 @@ async function routeApi(request, env, ctx, url) {
     add('R2 FILES',!!env.FILES,env.FILES?'Binding FILES đã có':'Thiếu binding FILES');
     add('Durable Object LIVE_ROOM',!!env.LIVE_ROOM,env.LIVE_ROOM?'Binding LIVE_ROOM đã có':'Thiếu binding LIVE_ROOM');
     {const sf=realtimeSfuConfig(env);add('Realtime SFU / skyfirsthoc',sf.configured,sf.configured?`Đã cấu hình ${sf.appName}`:'Thiếu REALTIME_APP_ID hoặc REALTIME_APP_SECRET');}
-    {const mc=mailConfig(env);add('Dịch vụ email',!!mc.key,mc.key?`Đã cấu hình gửi từ ${mc.from}`:'Chưa cấu hình khóa gửi email');}
+    add('Resend',!!env.RESEND_API_KEY,env.RESEND_API_KEY?'RESEND_API_KEY đã cấu hình':'Chưa có RESEND_API_KEY; email sẽ không gửi');
     {const ai=aiProviderConfig(env);add('Sky First AI',ai.configured,ai.configured?`Provider ${ai.provider}; model ${ai.model}`:'Thiếu AI_API_KEY hoặc cấu hình provider/model');}
     add('Setup token',!!env.SETUP_TOKEN,env.SETUP_TOKEN?'SETUP_TOKEN đã cấu hình':'Nên cấu hình SETUP_TOKEN để bảo vệ khởi tạo');
     const failed=checks.filter(x=>!x.ok).length; return ok({version:'VPLUS',status:failed?'attention':'healthy',failed,checks,time:nowIso()});
   }
 
   if(path==='/api/admin/system/test-email' && method==='POST'){
-    const admin=await requireRole(request,env,['super_admin']); const u=await env.DB.prepare(`SELECT email,full_name FROM users WHERE id=?`).bind(admin.user_id).first(); const body=emailShell({title:'Kiểm tra hệ thống email',preheader:'Email kiểm tra từ Trung tâm Học tập Số Sky First Network',env,body:`<p>Xin chào <b>${htmlEsc(u?.full_name||'Quản trị viên')}</b>,</p><p>Email này xác nhận dịch vụ gửi thư của Trung tâm Học tập Số đang hoạt động và nhà cung cấp đã tiếp nhận yêu cầu gửi.</p>`}); const mail=await sendMail(env,u.email,'[Sky First] Kiểm tra hệ thống email',body); await adminLog(env,admin.user_id,'system.test_email',{sent:mail.sent}); return ok({sent:mail.sent,reason:mail.reason||''});
+    const admin=await requireRole(request,env,['super_admin']); const u=await env.DB.prepare(`SELECT email,full_name FROM users WHERE id=?`).bind(admin.user_id).first(); const body=emailShell({title:'Kiểm tra hệ thống email V10',preheader:'Email kiểm tra từ Trung tâm Học tập Số Sky First Network',env,body:`<p>Xin chào <b>${htmlEsc(u?.full_name||'Quản trị viên')}</b>,</p><p>Email này xác nhận cấu hình gửi thư của hệ thống V10 đang được kiểm tra trực tiếp từ Control Center.</p>`}); const mail=await sendMail(env,u.email,'[Sky First] Kiểm tra hệ thống email V10',body); await adminLog(env,admin.user_id,'system.test_email',{sent:mail.sent}); return ok({sent:mail.sent,reason:mail.reason||''});
   }
 
   if(path==='/api/admin/system/cleanup' && method==='POST'){

@@ -3,8 +3,8 @@ const fail=[];
 const exists=p=>fs.existsSync(p);
 for(const legacy of ['public/classroom/v13-classroom.js','public/classroom/sfu-client.js']) if(exists(legacy)) fail.push(`Legacy module vẫn tồn tại: ${legacy}`);
 const app=fs.readFileSync('public/app.js','utf8');
-if(!/import\(\s*[\"']\/classroom\/classroom-plus\.js(?:\?[^\"']*)?[\"']\s*\)/.test(app)) fail.push('classroom-plus chưa là classroom module duy nhất');
-if(!/import\(\s*[\"']\/classroom\/media-client\.js(?:\?[^\"']*)?[\"']\s*\)/.test(app)) fail.push('media-client chưa là media module duy nhất');
+if(!app.includes("import('/classroom/classroom-plus.js')")) fail.push('classroom-plus chưa là classroom module duy nhất');
+if(!app.includes("import('/classroom/media-client.js')")) fail.push('media-client chưa là media module duy nhất');
 const mig=fs.readdirSync('migrations').filter(x=>/^\d{4}_.*\.sql$/.test(x));
 const groups={}; for(const f of mig){const n=f.slice(0,4);(groups[n]??=[]).push(f)}
 for(const [n,files] of Object.entries(groups)) if(files.length>1 && n!=='0007') fail.push(`Migration prefix trùng mới ${n}: ${files.join(', ')}`);

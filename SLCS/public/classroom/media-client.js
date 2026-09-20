@@ -60,14 +60,35 @@ export class SkyMediaClient {
     if(!track)throw new Error('Track không hợp lệ.');await this.init();
     return this._serial(async()=>{
       const existing=this.published.get(source);if(existing?.sender){await existing.sender.replaceTrack(track);existing.track=track;return existing.meta}
+      // A Cloudflare Realtime Session maps 1:1 to this PeerConnection.  Every SDP
+      // mutation is serialized by _serial(); never start a local publish while a
+      // server-offer subscription is still being answered.
+      if(this.pc.signalingState!=='stable')throw new Error('MEDIA_SIGNALING_NOT_STABLE');
       const transceiver=this.pc.addTransceiver(track,{direction:'sendonly'});
-      const offer=await this.pc.createOffer();await this.pc.setLocalDescription(offer);
+      const offer=await this.pc.createOffer();
+      await this.pc.setLocalDescription(offer);
+      // Use the description actually installed on the PeerConnection.  On mobile
+      // Chromium this is important after prior SFU renegotiations because it is the
+      // browser's canonical MID/m-section state for the current negotiation.
+      const localOffer=this.pc.localDescription;
       const mid=transceiver.mid;if(mid==null)throw new Error('MEDIA_PUBLISH_MID_MISSING');
+      if(localOffer?.type!=='offer'||!localOffer.sdp)throw new Error('MEDIA_PUBLISH_OFFER_MISSING');
       const trackName=`${source}:${track.id||crypto.randomUUID()}`;
-      // Follow Cloudflare's reference flow exactly: send the SDP returned by createOffer().
-      const result=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/tracks`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,operation:'publish',sessionDescription:{type:'offer',sdp:offer.sdp},tracks:[{location:'local',mid,trackName,kind:track.kind,source}]})});
+      console.log('[P0.2][PUBLISH_OFFER]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState,transceivers:this.pc.getTransceivers().map(t=>({mid:t.mid,direction:t.direction,currentDirection:t.currentDirection,kind:t.sender?.track?.kind||t.receiver?.track?.kind||''}))});
+      const result=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/tracks`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,operation:'publish',sessionDescription:{type:localOffer.type,sdp:localOffer.sdp},tracks:[{location:'local',mid,trackName,kind:track.kind,source}]})});
       if(result?.sessionDescription?.type!=='answer'||!result.sessionDescription?.sdp)throw new Error('MEDIA_PUBLISH_ANSWER_MISSING');
-      await this.pc.setRemoteDescription(result.sessionDescription);await this._waitForConnected();
+      try{
+        await this.pc.setRemoteDescription(result.sessionDescription);
+      }catch(error){
+        console.error('[P0.2][PUBLISH_ANSWER_REJECTED]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState,error:error?.message||String(error)});
+        // Do not leave a failed sender feeding media locally.  A failed SFU answer
+        // must be treated as a failed publish rather than pretending the camera is live.
+        try{await transceiver.sender.replaceTrack(null)}catch{}
+        try{transceiver.stop()}catch{}
+        throw new Error('MEDIA_PUBLISH_NEGOTIATION_FAILED');
+      }
+      console.log('[P0.2][PUBLISH_ANSWER_OK]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState});
+      await this._waitForConnected();
       const cloudTrack=result.tracks?.find(x=>x.trackName===trackName)||result.tracks?.[0];if(!cloudTrack?.trackName)throw new Error('MEDIA_PUBLISH_TRACK_MISSING');
       const meta={sessionId:this.sessionId,trackName:cloudTrack.trackName,mid:cloudTrack.mid??mid,kind:track.kind,source};this.published.set(source,{sender:transceiver.sender,transceiver,track,meta});return meta;
     })

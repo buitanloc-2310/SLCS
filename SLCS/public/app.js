@@ -7,7 +7,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{if((
 function cycleTheme(){const cur=localStorage.getItem(THEME_KEY)||'system';const next=cur==='system'?'light':cur==='light'?'dark':'system';applyTheme(next);document.querySelectorAll('[data-theme-toggle]').forEach(b=>{b.dataset.themeLabel=next;b.title=`Giao diện: ${{system:'Theo thiết bị',light:'Sáng',dark:'Tối'}[next]}`;b.querySelector('span')&&(b.querySelector('span').textContent=({system:'◐',light:'☀',dark:'☾'}[next]))})}
 const loadAiModule=()=>_aiModulePromise||=import('/ai/vplus-ai.js');
 const loadClassroomModule=()=>_classroomModulePromise||=import('/classroom/classroom-plus.js?v=20260920-p01-guest-sfu1');
-const loadMediaModule=()=>_mediaModulePromise||=import('/classroom/media-client.js?v=20260920-p01-guest-sfu1');
+const loadMediaModule=()=>_mediaModulePromise||=import('/classroom/media-client.js?v=20260920-p02-sdp1');
 const loadQrLibrary=()=>{if(window.SLCQRCode)return Promise.resolve(window.SLCQRCode);if(_qrPromise)return _qrPromise;_qrPromise=new Promise((resolve,reject)=>{const x=document.createElement('script');x.src='/vendor/slc-qrcode.js?v=20260919-qr-local1';x.async=true;x.onload=()=>window.SLCQRCode?resolve(window.SLCQRCode):reject(new Error('QR_INIT_FAILED'));x.onerror=()=>reject(new Error('QR_LOAD_FAILED'));document.head.appendChild(x)});return _qrPromise};
 function mountSkyFirstAI(opts){
   document.querySelector('#sfnAiLauncher')?.remove();_aiLazyButton?.remove();

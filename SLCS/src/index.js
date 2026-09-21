@@ -21,9 +21,6 @@ function sessionCookie(token, days=30) { return `${COOKIE}=${encodeURIComponent(
 function clearCookie() { return `${COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`; }
 function idCode(n) { return `SFN${String(n).padStart(5,'0')}`; }
 function slugCode(prefix='CLS') { return `${prefix}-${Math.random().toString(36).slice(2,6).toUpperCase()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`; }
-function temporaryPassword(){const a=new Uint32Array(3);crypto.getRandomValues(a);return 'SFN@TEENTNVMAX'+[...a].map(n=>String((n%9)+1)).join('');}
-function profileObject(raw='{}'){try{const x=JSON.parse(raw||'{}');return x&&typeof x==='object'&&!Array.isArray(x)?x:{}}catch{return {}}}
-function withProfileFlag(raw,key,value){const p=profileObject(raw);p[key]=value;return JSON.stringify(p)}
 
 async function hashPassword(password, saltHex = null) {
   const salt = saltHex ? Uint8Array.from(saltHex.match(/.{1,2}/g).map(x=>parseInt(x,16))) : crypto.getRandomValues(new Uint8Array(16));
@@ -38,7 +35,7 @@ async function verifyPassword(password, salt, expected) { return (await hashPass
 async function getSession(request, env) {
   const token = cookieParse(request.headers.get('cookie') || '')[COOKIE];
   if (!token) return null;
-  const row = await env.DB.prepare(`SELECT s.id session_id,s.user_id,s.expires_at,u.sfn_no,u.sfn_id,u.full_name,u.email,u.phone,u.role,u.status,u.avatar_key,u.profile_json FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at > CURRENT_TIMESTAMP AND u.status='active'`).bind(token).first();
+  const row = await env.DB.prepare(`SELECT s.id session_id,s.user_id,s.expires_at,u.sfn_no,u.sfn_id,u.full_name,u.email,u.phone,u.role,u.status,u.avatar_key FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at > CURRENT_TIMESTAMP AND u.status='active'`).bind(token).first();
   return row || null;
 }
 async function requireUser(req, env) { const u=await getSession(req,env); if(!u) throw Object.assign(new Error('AUTH'),{status:401}); return u; }
@@ -139,12 +136,19 @@ function requestReceivedEmail(env,{fullName,requestCode,email,phone,data}){
   const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>, yêu cầu cấp tài khoản SFN của bạn đã được hệ thống ghi nhận.</p><div style="margin:22px 0;padding:22px;border-radius:20px;background:linear-gradient(135deg,#fff3f0,#f8edff);border:1px solid #ecd8e7;text-align:center"><div style="font-size:12px;color:#796879;font-weight:700;margin-bottom:8px">MÃ TRA CỨU YÊU CẦU</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:800;letter-spacing:1px;color:#7f2457">${htmlEsc(requestCode)}</div><div style="display:inline-block;margin-top:10px;background:#ffe5d8;color:#8a3b28;padding:7px 11px;border-radius:999px;font-weight:700;font-size:12px">ĐÃ TIẾP NHẬN</div></div><table role="presentation" style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #eee1eb;border-radius:18px;overflow:hidden"><tr><td style="padding:12px 15px;font-weight:700;color:#5b4759">Email đăng ký</td><td style="padding:12px 15px">${htmlEsc(email)}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#5b4759;border-top:1px solid #f1e7ef">Số điện thoại</td><td style="padding:12px 15px;border-top:1px solid #f1e7ef">${htmlEsc(phone)}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#5b4759;border-top:1px solid #f1e7ef">Đơn vị học tập</td><td style="padding:12px 15px;border-top:1px solid #f1e7ef">${htmlEsc(data.education_unit||'Chưa cung cấp')}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#5b4759;border-top:1px solid #f1e7ef">Lớp / Khóa</td><td style="padding:12px 15px;border-top:1px solid #f1e7ef">${htmlEsc(data.class_name||'Chưa cung cấp')}</td></tr></table><div style="text-align:center;margin:28px 0"><a href="${lookup}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">TRA CỨU YÊU CẦU</a></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px"><b>Lưu ý:</b> Email này xác nhận hệ thống đã tiếp nhận hồ sơ, chưa đồng nghĩa với việc tài khoản đã được cấp. Các cập nhật quan trọng sẽ được gửi đến email đăng ký.</div>`;
   return emailShell({title:'Xác nhận tiếp nhận yêu cầu cấp tài khoản',preheader:`Mã tra cứu: ${requestCode}`,body,env});
 }
-function credentialsEmail(env,{fullName,sfnId,password,isReset=false}){
-  const loginUrl=`${env.APP_URL||'https://slc.skyfirst.io.vn'}/#login`;
-  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>, ${isReset?'mật khẩu tạm của tài khoản SFN đã được cấp lại.':'tài khoản SFN của bạn đã được quản trị viên xác nhận và cấp thông tin đăng nhập.'}</p><div style="padding:20px;border-radius:18px;background:#fff4f2;border:1px solid #eddce3"><div style="font-size:12px;color:#7a6674;font-weight:700">TÀI KHOẢN / SFN ID</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:900;color:#7f2457;margin-top:6px">${htmlEsc(sfnId)}</div><div style="font-size:12px;color:#7a6674;font-weight:700;margin-top:18px">MẬT KHẨU TẠM</div><div style="font-family:Consolas,monospace;font-size:21px;font-weight:900;color:#7f2457;margin-top:6px">${htmlEsc(password)}</div></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px;margin-top:18px"><b>Bảo mật:</b> Đây là mật khẩu tạm. Sau khi đăng nhập, vui lòng đổi mật khẩu ngay. Không chia sẻ email này hoặc mật khẩu với người khác.</div><div style="text-align:center;margin:28px 0"><a href="${loginUrl}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">ĐĂNG NHẬP SLC</a></div>`;
-  return emailShell({title:isReset?'Mật khẩu tạm mới cho tài khoản SFN':'Thông tin đăng nhập tài khoản SFN',preheader:`SFN ID: ${sfnId}`,body,env});
+function activationEmail(env,{fullName,sfnId,activationUrl}){
+  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>, yêu cầu cấp tài khoản của bạn đã được phê duyệt.</p><div style="padding:20px;border-radius:18px;background:#fff4f2;border:1px solid #eddce3"><div style="font-size:12px;color:#7a6674;font-weight:700">SFN ID CỦA BẠN</div><div style="font-family:Consolas,monospace;font-size:28px;font-weight:900;color:#7f2457;margin-top:6px">${htmlEsc(sfnId)}</div></div><p style="line-height:1.7">Để hoàn tất, hãy tạo mật khẩu cho tài khoản bằng nút bên dưới. Liên kết kích hoạt có thời hạn và chỉ sử dụng một lần.</p><div style="text-align:center;margin:28px 0"><a href="${activationUrl}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">KÍCH HOẠT TÀI KHOẢN</a></div>`;
+  return emailShell({title:'Tài khoản SFN của bạn đã được phê duyệt',preheader:`SFN ID: ${sfnId}`,body,env});
 }
-
+function temporaryPassword(){
+  const a=new Uint32Array(3); crypto.getRandomValues(a);
+  return 'SFN@TEENTNVMAX'+[...a].map(n=>String((n%9)+1)).join('');
+}
+function credentialsEmail(env,{fullName,sfnId,password,isReset=false}){
+  const login=`${env.APP_URL||'https://slc.skyfirst.io.vn'}/#login`;
+  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>,</p><p style="line-height:1.7">${isReset?'Mật khẩu tài khoản của bạn vừa được quản trị viên cấp lại.':'Tài khoản của bạn đã được quản trị viên kích hoạt.'} Dưới đây là thông tin đăng nhập tạm thời.</p><div style="padding:20px;border-radius:18px;background:#fff4f2;border:1px solid #eddce3"><div style="font-size:12px;color:#7a6674;font-weight:700">TÀI KHOẢN / SFN ID</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:900;color:#7f2457;margin:6px 0 18px">${htmlEsc(sfnId)}</div><div style="font-size:12px;color:#7a6674;font-weight:700">MẬT KHẨU TẠM</div><div style="font-family:Consolas,monospace;font-size:22px;font-weight:900;color:#7f2457;margin-top:6px">${htmlEsc(password)}</div></div><div style="text-align:center;margin:28px 0"><a href="${login}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">ĐĂNG NHẬP SLC</a></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px"><b>Bảo mật:</b> Đây là mật khẩu tạm. Hãy đổi mật khẩu sau khi đăng nhập và không chia sẻ thông tin đăng nhập cho người khác.</div>`;
+  return emailShell({title:isReset?'Mật khẩu tài khoản SFN đã được cấp lại':'Tài khoản SFN đã được kích hoạt',preheader:`SFN ID: ${sfnId}`,body,env});
+}
 async function writeEmailLog(env,{to,subject,status,providerId='',error=''}){try{await env.DB.prepare(`INSERT INTO email_logs(id,to_email,subject,status,provider_message_id,error,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),to,subject,status,providerId,error).run()}catch{}}
 function mailConfig(env){
   return {
@@ -398,7 +402,7 @@ async function routeApi(request, env, ctx, url) {
     const token=randomToken(32); const cfg=await getSettings(env).catch(()=>({})); const days=Math.max(1,Math.min(90,Number(cfg.default_session_days||env.SESSION_DAYS||30)));
     const exp=new Date(Date.now()+days*86400000).toISOString(); const ipHash=ip?await sha256Text(ip):'';
     await env.DB.prepare(`INSERT INTO sessions(token,user_id,ip_hash,user_agent,expires_at,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(token,u.id,ipHash,(request.headers.get('user-agent')||'').slice(0,500),exp).run();
-    return json({ok:true,user:{sfn_id:u.sfn_id,full_name:u.full_name,role:u.role,must_change_password:!!profileObject(u.profile_json).must_change_password}},200,{'set-cookie':sessionCookie(token,days)});
+    return json({ok:true,user:{sfn_id:u.sfn_id,full_name:u.full_name,role:u.role}},200,{'set-cookie':sessionCookie(token,days)});
   }
 
   if (path === '/api/auth/logout' && method === 'POST') {
@@ -409,7 +413,7 @@ async function routeApi(request, env, ctx, url) {
   if (path === '/api/auth/me' && method === 'GET') {
     const u=await getSession(request,env); if(!u) return ok({user:null});
     const exam=await activeExam(u.user_id,env);
-    return ok({user:{id:u.user_id,sfn_id:u.sfn_id,full_name:u.full_name,email:u.email,phone:u.phone,role:u.role,avatar_key:u.avatar_key,must_change_password:!!profileObject(u.profile_json).must_change_password},active_exam:exam||null});
+    return ok({user:{id:u.user_id,sfn_id:u.sfn_id,full_name:u.full_name,email:u.email,phone:u.phone,role:u.role,avatar_key:u.avatar_key},active_exam:exam||null});
   }
 
   if (path === '/api/auth/activate' && method === 'POST') {
@@ -442,8 +446,8 @@ async function routeApi(request, env, ctx, url) {
   }
   if(path==='/api/account/password' && method==='POST'){
     const u=await requireUser(request,env); const b=await request.json(); const oldPw=str(b.current_password), newPw=str(b.new_password); if(newPw.length<10)return bad('Mật khẩu mới phải có ít nhất 10 ký tự.');
-    const row=await env.DB.prepare(`SELECT password_hash,password_salt,profile_json FROM users WHERE id=?`).bind(u.user_id).first(); if(!row||!(await verifyPassword(oldPw,row.password_salt,row.password_hash)))return bad('Mật khẩu hiện tại không đúng.',401);
-    const hp=await hashPassword(newPw), profile=withProfileFlag(row.profile_json,'must_change_password',false); await env.DB.batch([env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,profile_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,profile,u.user_id),env.DB.prepare(`DELETE FROM sessions WHERE user_id=? AND token<>?`).bind(u.user_id,cookieParse(request.headers.get('cookie')||'')[COOKIE]||'')]); return ok();
+    const row=await env.DB.prepare(`SELECT password_hash,password_salt FROM users WHERE id=?`).bind(u.user_id).first(); if(!row||!(await verifyPassword(oldPw,row.password_salt,row.password_hash)))return bad('Mật khẩu hiện tại không đúng.',401);
+    const hp=await hashPassword(newPw); await env.DB.batch([env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,u.user_id),env.DB.prepare(`DELETE FROM sessions WHERE user_id=? AND token<>?`).bind(u.user_id,cookieParse(request.headers.get('cookie')||'')[COOKIE]||'')]); return ok();
   }
   if(path==='/api/account/sessions' && method==='GET'){
     const u=await requireUser(request,env); const token=cookieParse(request.headers.get('cookie')||'')[COOKIE]||''; const rows=await env.DB.prepare(`SELECT id,token,user_agent,expires_at,created_at FROM sessions WHERE user_id=? ORDER BY created_at DESC`).bind(u.user_id).all(); return ok({sessions:(rows.results||[]).map(x=>({id:x.id,user_agent:x.user_agent,expires_at:x.expires_at,created_at:x.created_at,current:x.token===token}))});
@@ -852,14 +856,16 @@ async function routeApi(request, env, ctx, url) {
   if(approve && method==='POST'){
     const admin=await requireRole(request,env,['super_admin','account_admin']); const reqRow=await env.DB.prepare(`SELECT * FROM account_requests WHERE id=? AND status IN ('pending','reviewing','needs_info')`).bind(approve[1]).first(); if(!reqRow)return bad('Yêu cầu không tồn tại hoặc đã xử lý.');
     if(await env.DB.prepare(`SELECT 1 ok FROM users WHERE lower(email)=lower(?)`).bind(reqRow.email).first())return bad('Email này đã có tài khoản.',409);
-    const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first(); if(!seq)return bad(`Hệ thống đã đạt giới hạn ${MAX_ACCOUNTS.toLocaleString('vi-VN')} tài khoản cho giai đoạn khởi tạo.`,409);
-    const sfnNo=Number(seq.value), userId=crypto.randomUUID(), data=JSON.parse(reqRow.data_json||'{}');
+    const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first();
+    if(!seq) return bad(`Hệ thống đã đạt giới hạn ${MAX_ACCOUNTS.toLocaleString('vi-VN')} tài khoản cho giai đoạn khởi tạo.`,409);
+    const sfnNo=Number(seq.value); const userId=crypto.randomUUID();
+    const data=JSON.parse(reqRow.data_json||'{}');
     await env.DB.batch([
       env.DB.prepare(`INSERT INTO users(id,sfn_no,sfn_id,full_name,email,phone,role,status,avatar_key,profile_json,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending_activation',?,?, '', '',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(userId,sfnNo,idCode(sfnNo),reqRow.full_name,reqRow.email,reqRow.phone,data.requested_access==='teacher'?'teacher':'student',reqRow.portrait_key,JSON.stringify(data)),
       env.DB.prepare(`UPDATE account_requests SET status='approved',reviewed_by=?,reviewed_at=CURRENT_TIMESTAMP,approved_user_id=? WHERE id=?`).bind(admin.user_id,userId,reqRow.id)
     ]);
     await adminLog(env,admin.user_id,'account_request.approve',{id:reqRow.id,user_id:userId,sfn_id:idCode(sfnNo)});
-    return ok({sfn_id:idCode(sfnNo),user_id:userId,status:'pending_activation',email_sent:false});
+    return ok({sfn_id:idCode(sfnNo),user_id:userId,status:'pending_activation',activation_email_sent:false,limit:MAX_ACCOUNTS});
   }
 
 
@@ -885,25 +891,32 @@ async function routeApi(request, env, ctx, url) {
   const resendRequestMail=path.match(/^\/api\/admin\/account-requests\/([^/]+)\/resend-email$/);
   if(resendRequestMail && method==='POST'){
     const admin=await requireRole(request,env,['super_admin','account_admin']);
-    const row=await env.DB.prepare(`SELECT r.*,u.sfn_id approved_sfn_id,u.id approved_user_id,u.full_name user_name,u.email user_email,u.profile_json FROM account_requests r LEFT JOIN users u ON u.id=r.approved_user_id WHERE r.id=?`).bind(resendRequestMail[1]).first(); if(!row)return bad('Không tìm thấy yêu cầu.',404);
-    let mail;
+    const row=await env.DB.prepare(`SELECT r.*,u.sfn_id approved_sfn_id,u.id approved_user_id,u.status user_status,u.full_name user_full_name,u.email user_email FROM account_requests r LEFT JOIN users u ON u.id=r.approved_user_id WHERE r.id=?`).bind(resendRequestMail[1]).first();
+    if(!row)return bad('Không tìm thấy yêu cầu.',404);
     if(row.status==='approved' && row.approved_user_id){
-      const password=temporaryPassword(), hp=await hashPassword(password), profile=withProfileFlag(row.profile_json,'must_change_password',true);
-      await env.DB.batch([env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,profile_json=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,profile,row.approved_user_id),env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(row.approved_user_id)]);
-      const fallback=credentialsEmail(env,{fullName:row.user_name||row.full_name,sfnId:row.approved_sfn_id,password}); const tpl=await resolveEmailTemplate(env,'account_credentials',`[Sky First] Thông tin đăng nhập ${row.approved_sfn_id}`,fallback,{full_name:row.user_name||row.full_name,sfn_id:row.approved_sfn_id,temporary_password:password,login_url:`${env.APP_URL}/#login`}); mail=await sendMail(env,row.user_email||row.email,tpl.subject,tpl.html);
-    }else{let data={};try{data=JSON.parse(row.data_json||'{}')}catch{} const fallback=requestReceivedEmail(env,{fullName:row.full_name,requestCode:row.request_code,email:row.email,phone:row.phone,data}); const tpl=await resolveEmailTemplate(env,'account_request_received','[Sky First] Xác nhận tiếp nhận yêu cầu cấp tài khoản',fallback,{full_name:row.full_name,request_code:row.request_code,email:row.email,phone:row.phone}); mail=await sendMail(env,row.email,tpl.subject,tpl.html);}
-    await adminLog(env,admin.user_id,'account_request.send_email',{id:row.id,sent:mail.sent,code:mail.code||''}); return ok({sent:mail.sent,reason:mail.reason||'',code:mail.code||''});
+      const password=temporaryPassword(); const hp=await hashPassword(password);
+      await env.DB.batch([env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,row.approved_user_id),env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(row.approved_user_id)]);
+      const mail=await sendMail(env,row.user_email||row.email,`[Sky First] Thông tin đăng nhập ${row.approved_sfn_id}`,credentialsEmail(env,{fullName:row.user_full_name||row.full_name,sfnId:row.approved_sfn_id,password}));
+      await adminLog(env,admin.user_id,'account_request.send_activation_email',{id:row.id,user_id:row.approved_user_id,sent:mail.sent});
+      return ok({sent:mail.sent,reason:mail.reason||'',code:mail.code||'',activated:true});
+    }
+    let data={};try{data=JSON.parse(row.data_json||'{}')}catch{} const fallback=requestReceivedEmail(env,{fullName:row.full_name,requestCode:row.request_code,email:row.email,phone:row.phone,data}); const tpl=await resolveEmailTemplate(env,'account_request_received','[Sky First] Xác nhận tiếp nhận yêu cầu cấp tài khoản',fallback,{full_name:row.full_name,request_code:row.request_code,email:row.email,phone:row.phone}); const mail=await sendMail(env,row.email,tpl.subject,tpl.html);
+    await adminLog(env,admin.user_id,'account_request.resend_email',{id:row.id,sent:mail.sent,code:mail.code||''});
+    return ok({sent:mail.sent,reason:mail.reason||'',code:mail.code||''});
   }
-
 
   if(path==='/api/admin/users/create' && method==='POST'){
-    const admin=await requireRole(request,env,['super_admin','account_admin']); const b=await request.json(); const fullName=str(b.full_name), email=normalizeEmail(str(b.email)), phone=str(b.phone), role=['teacher','assistant','student','account_admin','school_admin'].includes(b.role)?b.role:'student';
-    if(!fullName||!email)return bad('Họ tên và email là bắt buộc.'); if(!validEmail(email))return bad('Địa chỉ email không hợp lệ.'); if(await env.DB.prepare(`SELECT 1 ok FROM users WHERE lower(email)=lower(?)`).bind(email).first())return bad('Email đã có tài khoản.',409);
-    const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first(); if(!seq)return bad('Đã đạt giới hạn tài khoản.',409); const no=Number(seq.value),id=crypto.randomUUID();
+    const admin=await requireRole(request,env,['super_admin','account_admin']); const b=await request.json();
+    const fullName=str(b.full_name), email=normalizeEmail(str(b.email)), phone=str(b.phone), role=['teacher','assistant','student','account_admin','school_admin'].includes(b.role)?b.role:'student';
+    if(!fullName||!email) return bad('Họ tên và email là bắt buộc.');
+    if(!validEmail(email)) return bad('Địa chỉ email không hợp lệ.');
+    if(fullName.length>160||phone.length>40) return bad('Thông tin tài khoản vượt quá độ dài cho phép.');
+    if(await env.DB.prepare(`SELECT 1 ok FROM users WHERE lower(email)=lower(?)`).bind(email).first()) return bad('Email đã có tài khoản.',409);
+    const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first(); if(!seq)return bad('Đã đạt giới hạn tài khoản.',409);
+    const no=Number(seq.value), id=crypto.randomUUID();
     await env.DB.prepare(`INSERT INTO users(id,sfn_no,sfn_id,full_name,email,phone,role,status,profile_json,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending_activation','{}','','',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,no,idCode(no),fullName,email,phone,role).run();
-    await adminLog(env,admin.user_id,'user.create',{user_id:id,sfn_id:idCode(no),role}); return ok({id,sfn_id:idCode(no),status:'pending_activation',email_sent:false});
+    await adminLog(env,admin.user_id,'user.create',{user_id:id,sfn_id:idCode(no),role,status:'pending_activation'}); return ok({id,sfn_id:idCode(no),status:'pending_activation',email_sent:false});
   }
-
 
   if(path==='/api/admin/users/bulk-create' && method==='POST'){
     const admin=await requireRole(request,env,['super_admin','account_admin']); const b=await request.json(); const items=Array.isArray(b.users)?b.users.slice(0,200):[];
@@ -916,21 +929,24 @@ async function routeApi(request, env, ctx, url) {
       if(await env.DB.prepare(`SELECT 1 ok FROM users WHERE lower(email)=lower(?)`).bind(email).first()){results.push({email,status:'skip',message:'Email đã tồn tại'});continue;}
       const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first(); if(!seq){results.push({email,status:'error',message:'Đạt giới hạn tài khoản'});break;}
       const no=Number(seq.value), id=crypto.randomUUID();
-      await env.DB.prepare(`INSERT INTO users(id,sfn_no,sfn_id,full_name,email,phone,role,status,profile_json,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending_activation','{}','','',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,no,idCode(no),fullName,email,phone,role).run(); results.push({email,status:'created',sfn_id:idCode(no)});
+      await env.DB.prepare(`INSERT INTO users(id,sfn_no,sfn_id,full_name,email,phone,role,status,profile_json,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending_activation','{}','','',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,no,idCode(no),fullName,email,phone,role).run();
+      results.push({email,status:'created',sfn_id:idCode(no),activation_pending:true});
     }
     await adminLog(env,admin.user_id,'user.bulk_create',{count:items.length,created:results.filter(x=>x.status==='created').length}); return ok({results});
   }
 
-  const userAction=path.match(/^\/api\/admin\/users\/([^/]+)\/(force-logout|send-activation-email|reset-password)$/);
+  const userAction=path.match(/^\/api\/admin\/users\/([^/]+)\/(force-logout|send-activation|reset-password)$/);
   if(userAction && method==='POST'){
     const admin=await requireRole(request,env,['super_admin','account_admin']); const user=await env.DB.prepare(`SELECT * FROM users WHERE id=?`).bind(userAction[1]).first(); if(!user)return bad('Không tìm thấy tài khoản.',404);
-    if(userAction[2]==='force-logout'){await env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(user.id).run();await adminLog(env,admin.user_id,'user.force_logout',{user_id:user.id});return ok();}
-    const password=temporaryPassword(), hp=await hashPassword(password), profile=withProfileFlag(user.profile_json,'must_change_password',true);
-    await env.DB.batch([env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,profile_json=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,profile,user.id),env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(user.id)]);
-    const isReset=userAction[2]==='reset-password'; const fallback=credentialsEmail(env,{fullName:user.full_name,sfnId:user.sfn_id,password,isReset}); const tpl=await resolveEmailTemplate(env,isReset?'password_reset':'account_credentials',isReset?`[Sky First] Mật khẩu tạm mới ${user.sfn_id}`:`[Sky First] Thông tin đăng nhập ${user.sfn_id}`,fallback,{full_name:user.full_name,sfn_id:user.sfn_id,temporary_password:password,login_url:`${env.APP_URL}/#login`}); const mail=await sendMail(env,user.email,tpl.subject,tpl.html);
-    await adminLog(env,admin.user_id,isReset?'user.reset_password':'user.send_activation_email',{user_id:user.id,email_sent:mail.sent}); return ok({email_sent:mail.sent,reason:mail.reason||'',code:mail.code||''});
+    if(userAction[2]==='force-logout'){await env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(user.id).run(); await adminLog(env,admin.user_id,'user.force_logout',{user_id:user.id}); return ok();}
+    if(userAction[2]==='send-activation' && user.status!=='pending_activation') return bad('Tài khoản này không ở trạng thái chờ kích hoạt.',409);
+    const password=temporaryPassword(); const hp=await hashPassword(password);
+    await env.DB.batch([env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,user.id),env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(user.id)]);
+    const isReset=userAction[2]==='reset-password';
+    const mail=await sendMail(env,user.email,isReset?`[Sky First] Mật khẩu mới ${user.sfn_id}`:`[Sky First] Kích hoạt tài khoản ${user.sfn_id}`,credentialsEmail(env,{fullName:user.full_name,sfnId:user.sfn_id,password,isReset}));
+    await adminLog(env,admin.user_id,isReset?'user.reset_password':'user.send_activation',{user_id:user.id,email_sent:mail.sent});
+    return ok({email_sent:mail.sent,reason:mail.reason||'',code:mail.code||'',status:'active'});
   }
-
 
   if(path==='/api/admin/classes/create' && method==='POST'){
     const admin=await requireRole(request,env,['super_admin','school_admin']); const b=await request.json(); const name=str(b.name); if(!name)return bad('Tên lớp là bắt buộc.');

@@ -1,6 +1,0 @@
-SLCS P0 -> P2.4 CONSOLIDATED
-Golden runtime baseline: SLCS_P0_2_SDP_RENEGOTIATION_FIX(1).zip
-The proven media client was restored byte-for-byte from that baseline.
-P1/P2 account, email, beauty and hardening layers are included around it.
-Automated validation passed for VPLUS, P0, P1.1, P2.1, P2.2, P2.3, P2.4 and Cloudflare config.
-Production WebRTC/email behavior still requires deployment testing.

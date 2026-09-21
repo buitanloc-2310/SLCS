@@ -141,12 +141,31 @@ function activationEmail(env,{fullName,sfnId,activationUrl}){
   return emailShell({title:'Tài khoản SFN của bạn đã được phê duyệt',preheader:`SFN ID: ${sfnId}`,body,env});
 }
 async function writeEmailLog(env,{to,subject,status,providerId='',error=''}){try{await env.DB.prepare(`INSERT INTO email_logs(id,to_email,subject,status,provider_message_id,error,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),to,subject,status,providerId,error).run()}catch{}}
+function envValue(env, ...names){
+  // Cloudflare bindings should normally be available as env.NAME. The normalized
+  // lookup also tolerates an accidentally-created binding whose name contains
+  // surrounding whitespace/case differences without ever exposing its value.
+  for(const name of names){
+    const direct=env?.[name];
+    if(direct!==undefined && direct!==null && String(direct).trim()) return String(direct).trim();
+  }
+  const wanted=new Set(names.map(x=>String(x).trim().toUpperCase()));
+  for(const [key,value] of Object.entries(env||{})){
+    if(wanted.has(String(key).trim().toUpperCase()) && value!==undefined && value!==null && String(value).trim()) return String(value).trim();
+  }
+  return '';
+}
 function mailConfig(env){
   return {
-    key:String(env.RESEND_API_KEY||env.RESEND_KEY||env.RESEND_TOKEN||'').trim(),
-    from:String(env.MAIL_FROM||'Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>').trim(),
-    replyTo:String(env.MAIL_REPLY_TO||env.SUPPORT_EMAIL||'support@skyfirst.io.vn').trim()
+    key:envValue(env,'RESEND_API_KEY','RESEND_KEY','RESEND_TOKEN'),
+    from:envValue(env,'MAIL_FROM')||'Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>',
+    replyTo:envValue(env,'MAIL_REPLY_TO','SUPPORT_EMAIL')||'support@skyfirst.io.vn'
   };
+}
+function mailRuntimeInfo(env){
+  const names=Object.keys(env||{}).filter(k=>/RESEND|MAIL_|SUPPORT_EMAIL/i.test(k));
+  const cfg=mailConfig(env);
+  return {configured:!!cfg.key,binding_names:names,key_length:cfg.key.length,from:cfg.from,reply_to:cfg.replyTo};
 }
 function publicMailFailure(code='EMAIL_PROVIDER_ERROR'){
   return ({RESEND_API_KEY_NOT_CONFIGURED:'Dịch vụ email chưa được cấu hình.',EMAIL_TIMEOUT:'Dịch vụ email phản hồi quá chậm.',EMAIL_PROVIDER_REJECTED:'Nhà cung cấp email chưa chấp nhận thư.',EMAIL_NETWORK_ERROR:'Chưa thể kết nối dịch vụ email.'})[code]||'Email chưa gửi được.';
@@ -1159,10 +1178,15 @@ async function routeApi(request, env, ctx, url) {
     add('R2 FILES',!!env.FILES,env.FILES?'Binding FILES đã có':'Thiếu binding FILES');
     add('Durable Object LIVE_ROOM',!!env.LIVE_ROOM,env.LIVE_ROOM?'Binding LIVE_ROOM đã có':'Thiếu binding LIVE_ROOM');
     {const sf=realtimeSfuConfig(env);add('Realtime SFU / skyfirsthoc',sf.configured,sf.configured?`Đã cấu hình ${sf.appName}`:'Thiếu REALTIME_APP_ID hoặc REALTIME_APP_SECRET');}
-    {const mc=mailConfig(env);add('Dịch vụ email',!!mc.key,mc.key?`Đã cấu hình gửi từ ${mc.from}`:'Chưa cấu hình khóa gửi email');}
+    {const mc=mailConfig(env),mi=mailRuntimeInfo(env);add('Dịch vụ email',!!mc.key,mc.key?`Đã cấu hình gửi từ ${mc.from}`:`Runtime chưa nhận khóa gửi email (bindings: ${mi.binding_names.join(', ')||'không thấy binding email'})`);}
     {const ai=aiProviderConfig(env);add('Sky First AI',ai.configured,ai.configured?`Provider ${ai.provider}; model ${ai.model}`:'Thiếu AI_API_KEY hoặc cấu hình provider/model');}
     add('Setup token',!!env.SETUP_TOKEN,env.SETUP_TOKEN?'SETUP_TOKEN đã cấu hình':'Nên cấu hình SETUP_TOKEN để bảo vệ khởi tạo');
     const failed=checks.filter(x=>!x.ok).length; return ok({version:'VPLUS',status:failed?'attention':'healthy',failed,checks,time:nowIso()});
+  }
+
+  if(path==='/api/admin/system/mail-runtime' && method==='GET'){
+    await requireRole(request,env,['super_admin']);
+    return ok(mailRuntimeInfo(env));
   }
 
   if(path==='/api/admin/system/test-email' && method==='POST'){

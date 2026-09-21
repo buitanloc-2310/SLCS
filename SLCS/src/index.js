@@ -141,14 +141,16 @@ function activationEmail(env,{fullName,sfnId,activationUrl}){
   return emailShell({title:'Tài khoản SFN của bạn đã được phê duyệt',preheader:`SFN ID: ${sfnId}`,body,env});
 }
 function temporaryPassword(){
-  const a=new Uint32Array(3); crypto.getRandomValues(a);
-  return 'SFN@TEENTNVMAX'+[...a].map(n=>String((n%9)+1)).join('');
+  const a=new Uint8Array(3); crypto.getRandomValues(a);
+  return 'SFN@TEENTNVMAX'+[...a].map(x=>String((x%9)+1)).join('');
 }
-function credentialsEmail(env,{fullName,sfnId,password,isReset=false}){
-  const login=`${env.APP_URL||'https://slc.skyfirst.io.vn'}/#login`;
-  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>,</p><p style="line-height:1.7">${isReset?'Mật khẩu tài khoản của bạn vừa được quản trị viên cấp lại.':'Tài khoản của bạn đã được quản trị viên kích hoạt.'} Dưới đây là thông tin đăng nhập tạm thời.</p><div style="padding:20px;border-radius:18px;background:#fff4f2;border:1px solid #eddce3"><div style="font-size:12px;color:#7a6674;font-weight:700">TÀI KHOẢN / SFN ID</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:900;color:#7f2457;margin:6px 0 18px">${htmlEsc(sfnId)}</div><div style="font-size:12px;color:#7a6674;font-weight:700">MẬT KHẨU TẠM</div><div style="font-family:Consolas,monospace;font-size:22px;font-weight:900;color:#7f2457;margin-top:6px">${htmlEsc(password)}</div></div><div style="text-align:center;margin:28px 0"><a href="${login}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">ĐĂNG NHẬP SLC</a></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px"><b>Bảo mật:</b> Đây là mật khẩu tạm. Hãy đổi mật khẩu sau khi đăng nhập và không chia sẻ thông tin đăng nhập cho người khác.</div>`;
-  return emailShell({title:isReset?'Mật khẩu tài khoản SFN đã được cấp lại':'Tài khoản SFN đã được kích hoạt',preheader:`SFN ID: ${sfnId}`,body,env});
+function credentialsEmail(env,{fullName,sfnId,password,reset=false}){
+  const loginUrl=`${env.APP_URL||'https://slc.skyfirst.io.vn'}/#login`;
+  const title=reset?'Mật khẩu tạm mới của tài khoản SFN':'Thông tin kích hoạt tài khoản SFN';
+  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>,</p><p style="line-height:1.7">${reset?'Quản trị viên đã cấp lại mật khẩu cho tài khoản của bạn.':'Tài khoản của bạn đã được quản trị viên kích hoạt.'}</p><div style="padding:20px;border-radius:18px;background:#fff4f2;border:1px solid #eddce3"><div style="font-size:12px;color:#7a6674;font-weight:700">SFN ID / TÊN ĐĂNG NHẬP</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:900;color:#7f2457;margin:6px 0 18px">${htmlEsc(sfnId)}</div><div style="font-size:12px;color:#7a6674;font-weight:700">MẬT KHẨU TẠM</div><div style="font-family:Consolas,monospace;font-size:21px;font-weight:900;color:#7f2457;margin-top:6px">${htmlEsc(password)}</div></div><div style="text-align:center;margin:28px 0"><a href="${loginUrl}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">ĐĂNG NHẬP SLC</a></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px"><b>Bảo mật:</b> Đây là mật khẩu tạm. Hãy đổi mật khẩu sau khi đăng nhập và không chia sẻ thông tin đăng nhập cho người khác.</div>`;
+  return emailShell({title,preheader:`SFN ID: ${sfnId}`,body,env});
 }
+
 async function writeEmailLog(env,{to,subject,status,providerId='',error=''}){try{await env.DB.prepare(`INSERT INTO email_logs(id,to_email,subject,status,provider_message_id,error,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),to,subject,status,providerId,error).run()}catch{}}
 function mailConfig(env){
   return {
@@ -792,6 +794,7 @@ async function routeApi(request, env, ctx, url) {
     const current=await env.DB.prepare(`SELECT id,role,status FROM users WHERE id=?`).bind(adminUser[1]).first(); if(!current)return bad('Không tìm thấy tài khoản.',404);
     const role=['super_admin','school_admin','account_admin','teacher','assistant','student'].includes(b.role)?b.role:current.role;
     const status=['active','suspended','disabled','pending_activation'].includes(b.status)?b.status:current.status;
+    if(status==='active' && (!current.password_hash || !current.password_salt)) return bad('Tài khoản chưa có mật khẩu. Hãy dùng Gửi email kích hoạt.',409);
     if(current.id===admin.user_id && (status!=='active'||role!=='super_admin')) return bad('Không thể tự hạ quyền hoặc tạm ngưng tài khoản quản trị đang đăng nhập.');
     await env.DB.prepare(`UPDATE users SET role=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(role,status,current.id).run(); await adminLog(env,admin.user_id,'user.update',{user_id:current.id,role,status}); return ok();
   }
@@ -858,16 +861,14 @@ async function routeApi(request, env, ctx, url) {
     if(await env.DB.prepare(`SELECT 1 ok FROM users WHERE lower(email)=lower(?)`).bind(reqRow.email).first())return bad('Email này đã có tài khoản.',409);
     const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first();
     if(!seq) return bad(`Hệ thống đã đạt giới hạn ${MAX_ACCOUNTS.toLocaleString('vi-VN')} tài khoản cho giai đoạn khởi tạo.`,409);
-    const sfnNo=Number(seq.value); const userId=crypto.randomUUID();
-    const data=JSON.parse(reqRow.data_json||'{}');
+    const sfnNo=Number(seq.value), userId=crypto.randomUUID(); const data=JSON.parse(reqRow.data_json||'{}');
     await env.DB.batch([
       env.DB.prepare(`INSERT INTO users(id,sfn_no,sfn_id,full_name,email,phone,role,status,avatar_key,profile_json,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending_activation',?,?, '', '',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(userId,sfnNo,idCode(sfnNo),reqRow.full_name,reqRow.email,reqRow.phone,data.requested_access==='teacher'?'teacher':'student',reqRow.portrait_key,JSON.stringify(data)),
       env.DB.prepare(`UPDATE account_requests SET status='approved',reviewed_by=?,reviewed_at=CURRENT_TIMESTAMP,approved_user_id=? WHERE id=?`).bind(admin.user_id,userId,reqRow.id)
     ]);
     await adminLog(env,admin.user_id,'account_request.approve',{id:reqRow.id,user_id:userId,sfn_id:idCode(sfnNo)});
-    return ok({sfn_id:idCode(sfnNo),user_id:userId,status:'pending_activation',activation_email_sent:false,limit:MAX_ACCOUNTS});
+    return ok({sfn_id:idCode(sfnNo),status:'pending_activation',email_sent:false,limit:MAX_ACCOUNTS});
   }
-
 
   const accountReview=path.match(/^\/api\/admin\/account-requests\/([^/]+)\/review$/);
   if(accountReview && method==='POST'){
@@ -893,16 +894,24 @@ async function routeApi(request, env, ctx, url) {
     const admin=await requireRole(request,env,['super_admin','account_admin']);
     const row=await env.DB.prepare(`SELECT r.*,u.sfn_id approved_sfn_id,u.id approved_user_id,u.status user_status,u.full_name user_full_name,u.email user_email FROM account_requests r LEFT JOIN users u ON u.id=r.approved_user_id WHERE r.id=?`).bind(resendRequestMail[1]).first();
     if(!row)return bad('Không tìm thấy yêu cầu.',404);
+    let mail;
     if(row.status==='approved' && row.approved_user_id){
-      const password=temporaryPassword(); const hp=await hashPassword(password);
-      await env.DB.batch([env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,row.approved_user_id),env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(row.approved_user_id)]);
-      const mail=await sendMail(env,row.user_email||row.email,`[Sky First] Thông tin đăng nhập ${row.approved_sfn_id}`,credentialsEmail(env,{fullName:row.user_full_name||row.full_name,sfnId:row.approved_sfn_id,password}));
-      await adminLog(env,admin.user_id,'account_request.send_activation_email',{id:row.id,user_id:row.approved_user_id,sent:mail.sent});
-      return ok({sent:mail.sent,reason:mail.reason||'',code:mail.code||'',activated:true});
+      if(row.user_status!=='pending_activation') return bad('Tài khoản này đã được kích hoạt. Hãy dùng chức năng Cấp lại mật khẩu trong Quản lý tài khoản.',409);
+      const password=temporaryPassword(), hp=await hashPassword(password);
+      const html=credentialsEmail(env,{fullName:row.user_full_name||row.full_name,sfnId:row.approved_sfn_id,password});
+      mail=await sendMail(env,row.user_email||row.email,`[Sky First] Thông tin kích hoạt tài khoản ${row.approved_sfn_id}`,html);
+      if(mail.sent){
+        await env.DB.batch([
+          env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending_activation'`).bind(hp.hash,hp.salt,row.approved_user_id),
+          env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(row.approved_user_id),
+          env.DB.prepare(`UPDATE activation_tokens SET used_at=CURRENT_TIMESTAMP WHERE user_id=? AND used_at IS NULL`).bind(row.approved_user_id)
+        ]);
+      }
+    }else{
+      let data={};try{data=JSON.parse(row.data_json||'{}')}catch{} const fallback=requestReceivedEmail(env,{fullName:row.full_name,requestCode:row.request_code,email:row.email,phone:row.phone,data}); const tpl=await resolveEmailTemplate(env,'account_request_received','[Sky First] Xác nhận tiếp nhận yêu cầu cấp tài khoản',fallback,{full_name:row.full_name,request_code:row.request_code,email:row.email,phone:row.phone}); mail=await sendMail(env,row.email,tpl.subject,tpl.html);
     }
-    let data={};try{data=JSON.parse(row.data_json||'{}')}catch{} const fallback=requestReceivedEmail(env,{fullName:row.full_name,requestCode:row.request_code,email:row.email,phone:row.phone,data}); const tpl=await resolveEmailTemplate(env,'account_request_received','[Sky First] Xác nhận tiếp nhận yêu cầu cấp tài khoản',fallback,{full_name:row.full_name,request_code:row.request_code,email:row.email,phone:row.phone}); const mail=await sendMail(env,row.email,tpl.subject,tpl.html);
-    await adminLog(env,admin.user_id,'account_request.resend_email',{id:row.id,sent:mail.sent,code:mail.code||''});
-    return ok({sent:mail.sent,reason:mail.reason||'',code:mail.code||''});
+    await adminLog(env,admin.user_id,row.status==='approved'?'account_request.activate_email':'account_request.resend_email',{id:row.id,sent:mail.sent,code:mail.code||''});
+    return ok({sent:mail.sent,reason:mail.reason||'',code:mail.code||'',activated:row.status==='approved'&&mail.sent});
   }
 
   if(path==='/api/admin/users/create' && method==='POST'){
@@ -915,7 +924,7 @@ async function routeApi(request, env, ctx, url) {
     const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first(); if(!seq)return bad('Đã đạt giới hạn tài khoản.',409);
     const no=Number(seq.value), id=crypto.randomUUID();
     await env.DB.prepare(`INSERT INTO users(id,sfn_no,sfn_id,full_name,email,phone,role,status,profile_json,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending_activation','{}','','',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,no,idCode(no),fullName,email,phone,role).run();
-    await adminLog(env,admin.user_id,'user.create',{user_id:id,sfn_id:idCode(no),role,status:'pending_activation'}); return ok({id,sfn_id:idCode(no),status:'pending_activation',email_sent:false});
+    await adminLog(env,admin.user_id,'user.create',{user_id:id,sfn_id:idCode(no),role}); return ok({id,sfn_id:idCode(no),status:'pending_activation',email_sent:false});
   }
 
   if(path==='/api/admin/users/bulk-create' && method==='POST'){
@@ -930,22 +939,29 @@ async function routeApi(request, env, ctx, url) {
       const seq=await env.DB.prepare(`UPDATE counters SET value=value+1 WHERE key='sfn_user' AND value < ? RETURNING value`).bind(MAX_ACCOUNTS).first(); if(!seq){results.push({email,status:'error',message:'Đạt giới hạn tài khoản'});break;}
       const no=Number(seq.value), id=crypto.randomUUID();
       await env.DB.prepare(`INSERT INTO users(id,sfn_no,sfn_id,full_name,email,phone,role,status,profile_json,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending_activation','{}','','',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(id,no,idCode(no),fullName,email,phone,role).run();
-      results.push({email,status:'created',sfn_id:idCode(no),activation_pending:true});
+      results.push({email,status:'created',sfn_id:idCode(no)});
     }
     await adminLog(env,admin.user_id,'user.bulk_create',{count:items.length,created:results.filter(x=>x.status==='created').length}); return ok({results});
   }
 
-  const userAction=path.match(/^\/api\/admin\/users\/([^/]+)\/(force-logout|send-activation|reset-password)$/);
+  const userAction=path.match(/^\/api\/admin\/users\/([^/]+)\/(force-logout|send-activation-email|reset-password)$/);
   if(userAction && method==='POST'){
     const admin=await requireRole(request,env,['super_admin','account_admin']); const user=await env.DB.prepare(`SELECT * FROM users WHERE id=?`).bind(userAction[1]).first(); if(!user)return bad('Không tìm thấy tài khoản.',404);
-    if(userAction[2]==='force-logout'){await env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(user.id).run(); await adminLog(env,admin.user_id,'user.force_logout',{user_id:user.id}); return ok();}
-    if(userAction[2]==='send-activation' && user.status!=='pending_activation') return bad('Tài khoản này không ở trạng thái chờ kích hoạt.',409);
-    const password=temporaryPassword(); const hp=await hashPassword(password);
-    await env.DB.batch([env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,user.id),env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(user.id)]);
-    const isReset=userAction[2]==='reset-password';
-    const mail=await sendMail(env,user.email,isReset?`[Sky First] Mật khẩu mới ${user.sfn_id}`:`[Sky First] Kích hoạt tài khoản ${user.sfn_id}`,credentialsEmail(env,{fullName:user.full_name,sfnId:user.sfn_id,password,isReset}));
-    await adminLog(env,admin.user_id,isReset?'user.reset_password':'user.send_activation',{user_id:user.id,email_sent:mail.sent});
-    return ok({email_sent:mail.sent,reason:mail.reason||'',code:mail.code||'',status:'active'});
+    const action=userAction[2];
+    if(action==='force-logout'){await env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(user.id).run(); await adminLog(env,admin.user_id,'user.force_logout',{user_id:user.id}); return ok();}
+    if(action==='send-activation-email' && user.status!=='pending_activation') return bad('Chỉ tài khoản Chờ kích hoạt mới có thể nhận email kích hoạt.',409);
+    if(action==='reset-password' && user.status!=='active') return bad('Chỉ tài khoản đang hoạt động mới có thể được cấp lại mật khẩu.',409);
+    const password=temporaryPassword(), hp=await hashPassword(password), reset=action==='reset-password';
+    const html=credentialsEmail(env,{fullName:user.full_name,sfnId:user.sfn_id,password,reset});
+    const mail=await sendMail(env,user.email,reset?`[Sky First] Cấp lại mật khẩu ${user.sfn_id}`:`[Sky First] Thông tin kích hoạt tài khoản ${user.sfn_id}`,html);
+    if(!mail.sent) return ok({sent:false,email_sent:false,reason:mail.reason||'Email chưa gửi được.',code:mail.code||''});
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(hp.hash,hp.salt,user.id),
+      env.DB.prepare(`DELETE FROM sessions WHERE user_id=?`).bind(user.id),
+      env.DB.prepare(`UPDATE activation_tokens SET used_at=CURRENT_TIMESTAMP WHERE user_id=? AND used_at IS NULL`).bind(user.id)
+    ]);
+    await adminLog(env,admin.user_id,reset?'user.reset_password':'user.activate_email',{user_id:user.id,email_sent:true});
+    return ok({sent:true,email_sent:true,status:'active'});
   }
 
   if(path==='/api/admin/classes/create' && method==='POST'){

@@ -1,0 +1,244 @@
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:p24
+> npm run validate:p23 && npm run validate:p2 && node scripts/validate-p24.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:p23
+> npm run validate:p22 && node scripts/validate-p23.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:p22
+> npm run validate:p21 && node scripts/validate-p22.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:p21
+> npm run validate:p11 && node scripts/validate-p21.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:p11
+> npm run validate:p0 && node scripts/validate-p11.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:p0
+> npm run validate:vplus && node scripts/validate-p0.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:vplus
+> npm run check && node scripts/validate-vplus.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback check
+> node --check src/index.js && node --check src/schema-v11.js && node --check src/live-room.js && node --check src/realtime-sfu.js && node --check src/v13-platform.js && node --check src/vplus-platform.js && node --check public/app.js && node --check public/classroom/media-client.js && node --check public/classroom/classroom-plus.js && node --check public/ai/vplus-ai.js && node --check functions/api/[[path]].js
+
+VPLUS validation: 51 checks passed
+  PASS required: src/index.js
+  PASS required: src/live-room.js
+  PASS required: src/realtime-sfu.js
+  PASS required: src/vplus-platform.js
+  PASS required: public/app.js
+  PASS required: public/classroom/media-client.js
+  PASS required: public/classroom/classroom-plus.js
+  PASS required: public/ai/vplus-ai.js
+  PASS required: migrations/0010_vplus_foundation.sql
+  PASS required: wrangler.json
+  PASS no frontend leakage: old SFU API path
+  PASS no frontend leakage: old V13 live API path
+  PASS no frontend leakage: old V13 classroom filename
+  PASS no frontend leakage: visible mesh fallback phrase
+  PASS no frontend leakage: visible SFU status phrase
+  PASS no frontend leakage: legacy reconnect version phrase
+  PASS secret absent from public code: REALTIME_APP_SECRET
+  PASS secret absent from public code: AI_API_KEY
+  PASS secret absent from public code: AI_RESEARCH_API_KEY
+  PASS AI client is lazy-loaded
+  PASS media client is lazy-loaded
+  PASS HTTP chat polling is fallback-only
+  PASS system tab is super-admin gated
+  PASS system pane removed for non-system-admin
+  PASS system endpoint exists: /api/admin/system/diagnostics
+  PASS system endpoint exists: /api/admin/system/live-metrics
+  PASS system endpoint exists: /api/admin/ai/status
+  PASS system endpoint exists: /api/admin/ai/test
+  PASS public health endpoint is minimal
+  PASS QR library is not render-blocking
+  PASS optimized UI logo exists
+  PASS Pages static cache headers exist
+  PASS duplicate GET request coalescing enabled
+  PASS QR library lazy loader enabled
+  PASS hidden-page SFU discovery suppression enabled
+  PASS AI research graceful fallback enabled
+  PASS AI transient retry enabled
+  PASS AI API key is normalized before auth
+  PASS OpenAI auth probe exists
+  PASS System Admin AI test separates authentication
+  PASS AI guard present: hasPermission
+  PASS AI guard present: requirePermission
+  PASS AI guard present: consumeAiQuota
+  PASS AI guard present: auditAi
+  PASS AI guard present: fetchResearchSources
+  PASS AI guard present: aiProviderConfig
+  PASS AI guard present: aiSupportsNativeResearch
+  PASS AI guard present: openai_responses
+  PASS AI guard present: web_search
+  PASS static imports resolve
+  PASS named imports match local exports
+VPLUS validation PASSED
+PASS stable external join landing
+PASS fresh token after prejoin
+PASS Pages realtime fallback endpoint
+PASS Pages realtime fallback client
+PASS websocket failure falls back
+PASS reconnect refreshes access
+PASS media capability guard
+PASS in-app browser guidance
+PASS server resource URL whitelist
+PASS client resource URL whitelist
+PASS AI absent from live
+11/11 P0 hardening checks passed
+PASS SFU active-list reconciliation
+PASS network recovery heartbeat
+PASS visibility recovery
+PASS screen-share browser stop
+PASS device hotplug listener cleanup
+PASS session close endpoint
+PASS remote track end cleanup
+PASS guest route remains enabled
+8/8 P1.1 stability checks passed
+PASS existing user cannot re-request
+PASS requested role allowlist
+PASS activation respects suspension
+PASS admin cannot self demote
+PASS suspended account status supported
+PASS terminal request protected
+PASS admin request view enriched
+PASS UI exposes suspension
+PASS mail failure UI truthful
+PASS P2.1 marker
+P2.1: 10/10 PASS
+PASS mail timeout
+PASS provider rejection
+PASS mail config aliases
+PASS reply-to support
+PASS email logging
+PASS request resend endpoint
+PASS admin email log UI
+PASS admin resend UI
+PASS safe public mail error
+PASS provider-confirmed wording
+P2.2 email: 10/10 PASS
+PASS beauty entitlement API
+PASS beauty hidden without entitlement
+PASS beauty module lazy load
+PASS camera publishes processed track
+PASS beauty can restore raw camera
+PASS audio not processed
+PASS screen not processed
+PASS local processing canvas
+PASS owner UI
+PASS cache marker
+P2.3 Beauty: 10/10 PASS
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:p2
+> npm run validate:p0 && npm run validate:config && node scripts/validate-p2.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:p0
+> npm run validate:vplus && node scripts/validate-p0.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:vplus
+> npm run check && node scripts/validate-vplus.mjs
+
+
+> sfn-slc@24.5.1-p2.5-ai-rollback check
+> node --check src/index.js && node --check src/schema-v11.js && node --check src/live-room.js && node --check src/realtime-sfu.js && node --check src/v13-platform.js && node --check src/vplus-platform.js && node --check public/app.js && node --check public/classroom/media-client.js && node --check public/classroom/classroom-plus.js && node --check public/ai/vplus-ai.js && node --check functions/api/[[path]].js
+
+VPLUS validation: 51 checks passed
+  PASS required: src/index.js
+  PASS required: src/live-room.js
+  PASS required: src/realtime-sfu.js
+  PASS required: src/vplus-platform.js
+  PASS required: public/app.js
+  PASS required: public/classroom/media-client.js
+  PASS required: public/classroom/classroom-plus.js
+  PASS required: public/ai/vplus-ai.js
+  PASS required: migrations/0010_vplus_foundation.sql
+  PASS required: wrangler.json
+  PASS no frontend leakage: old SFU API path
+  PASS no frontend leakage: old V13 live API path
+  PASS no frontend leakage: old V13 classroom filename
+  PASS no frontend leakage: visible mesh fallback phrase
+  PASS no frontend leakage: visible SFU status phrase
+  PASS no frontend leakage: legacy reconnect version phrase
+  PASS secret absent from public code: REALTIME_APP_SECRET
+  PASS secret absent from public code: AI_API_KEY
+  PASS secret absent from public code: AI_RESEARCH_API_KEY
+  PASS AI client is lazy-loaded
+  PASS media client is lazy-loaded
+  PASS HTTP chat polling is fallback-only
+  PASS system tab is super-admin gated
+  PASS system pane removed for non-system-admin
+  PASS system endpoint exists: /api/admin/system/diagnostics
+  PASS system endpoint exists: /api/admin/system/live-metrics
+  PASS system endpoint exists: /api/admin/ai/status
+  PASS system endpoint exists: /api/admin/ai/test
+  PASS public health endpoint is minimal
+  PASS QR library is not render-blocking
+  PASS optimized UI logo exists
+  PASS Pages static cache headers exist
+  PASS duplicate GET request coalescing enabled
+  PASS QR library lazy loader enabled
+  PASS hidden-page SFU discovery suppression enabled
+  PASS AI research graceful fallback enabled
+  PASS AI transient retry enabled
+  PASS AI API key is normalized before auth
+  PASS OpenAI auth probe exists
+  PASS System Admin AI test separates authentication
+  PASS AI guard present: hasPermission
+  PASS AI guard present: requirePermission
+  PASS AI guard present: consumeAiQuota
+  PASS AI guard present: auditAi
+  PASS AI guard present: fetchResearchSources
+  PASS AI guard present: aiProviderConfig
+  PASS AI guard present: aiSupportsNativeResearch
+  PASS AI guard present: openai_responses
+  PASS AI guard present: web_search
+  PASS static imports resolve
+  PASS named imports match local exports
+VPLUS validation PASSED
+PASS stable external join landing
+PASS fresh token after prejoin
+PASS Pages realtime fallback endpoint
+PASS Pages realtime fallback client
+PASS websocket failure falls back
+PASS reconnect refreshes access
+PASS media capability guard
+PASS in-app browser guidance
+PASS server resource URL whitelist
+PASS client resource URL whitelist
+PASS AI absent from live
+11/11 P0 hardening checks passed
+
+> sfn-slc@24.5.1-p2.5-ai-rollback validate:config
+> node scripts/validate-config.mjs
+
+CONFIG VALIDATION: PASS (Cloudflare Pages + D1 realtime fallback)
+P2 VALIDATION: PASS
+- 15 migrations audited; legacy 0007 set frozen
+- legacy classroom/SFU frontend modules removed
+- release documentation archived under docs/releases
+PASS P2 canonical validator accepts cache-busted classroom modules
+PASS beauty entitlement requires authenticated user
+PASS beauty entitlement is identity-scoped
+PASS guest never receives beauty entitlement
+PASS beauty never processes audio
+PASS beauty never processes display capture
+PASS email logs are admin protected
+PASS public account request cannot self-assign admin
+PASS account duplicate email guard
+PASS remote media cleanup remains present
+PASS network recovery remains present
+PASS screen and beauty are isolated
+PASS static asset cache remains bounded
+PASS no legacy SFU client restored
+P2.4 HARDENING: 14/14 PASS

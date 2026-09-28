@@ -1,6 +1,6 @@
 {
   "name": "sfn-slc",
-  "version": "25.1.0-p2-no-ai",
+  "version": "29.0.0-p2-auth-shell-rebuild",
   "private": true,
   "type": "module",
   "scripts": {

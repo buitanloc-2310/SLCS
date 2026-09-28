@@ -1,6 +1,6 @@
 {
   "name": "sfn-slc",
-  "version": "24.9.1-p2-ai-restored-stable",
+  "version": "25.0.0-architecture-restructured",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
     "deploy": "wrangler pages deploy public --project-name slc",
     "db:migrate": "wrangler d1 migrations apply skyfirsthoctap --remote",
     "db:migrate:local": "wrangler d1 migrations apply skyfirsthoctap --local",
-    "check": "node --check src/index.js && node --check src/schema-v11.js && node --check src/live-room.js && node --check src/realtime-sfu.js && node --check src/v13-platform.js && node --check src/vplus-platform.js && node --check public/app.js && node --check public/classroom/media-client.js && node --check public/classroom/classroom-plus.js && node --check public/ai/vplus-ai.js && node --check functions/api/[[path]].js",
+    "check": "node --check src/index.js && node --check src/schema-v11.js && node --check src/live-room.js && node --check src/realtime-sfu.js && node --check src/v13-platform.js && node --check src/vplus-platform.js && node --check src/ai/service.js && node --check public/app.js && node --check public/classroom/media-client.js && node --check public/classroom/classroom-plus.js && node --check public/ai/vplus-ai.js && node --check functions/api/[[path]].js",
     "validate:vplus": "npm run check && node scripts/validate-vplus.mjs",
     "deploy:p0": "npm run check && npm run deploy",
     "validate:p0": "npm run validate:vplus && node scripts/validate-p0.mjs",

@@ -2,7 +2,8 @@ import { LiveRoom } from './live-room.js';
 import { V11_SCHEMA_STAGES } from './schema-v11.js';
 import { realtimeSfuConfig, createRealtimeSession, addRealtimeTracks, renegotiateRealtimeSession, closeRealtimeTracks, ensureRealtimeSfuSchema } from './realtime-sfu.js';
 import { ensureV13Schema, getClassLiveSettings, safeJson, logLiveEvent } from './v13-platform.js';
-import { VPLUS, ensureVPlusSchema, recordPlatformEvent, auditAi, aiConfigured, aiProviderConfig, aiSupportsNativeResearch, callAiProvider, testAiAuthentication, aiKeyDiagnostic, buildAiSystemPrompt, hasPermission, requirePermission, safeUserMessage, consumeAiQuota, fetchResearchSources, parseAiAction, moderateAiInput } from './vplus-platform.js';
+import { VPLUS, ensureVPlusSchema, recordPlatformEvent, hasPermission, requirePermission, safeUserMessage } from './vplus-platform.js';
+import { auditAi, aiConfigured, aiProviderConfig, aiSupportsNativeResearch, callAiProvider, testAiAuthentication, aiKeyDiagnostic, buildAiSystemPrompt, consumeAiQuota, fetchResearchSources, parseAiAction, moderateAiInput } from './ai/service.js';
 export { LiveRoom };
 
 const SECURITY_HEADERS = {'x-content-type-options':'nosniff','referrer-policy':'strict-origin-when-cross-origin','x-frame-options':'SAMEORIGIN','permissions-policy':'camera=(self), microphone=(self), display-capture=(self), geolocation=()','cross-origin-opener-policy':'same-origin-allow-popups'};
@@ -460,7 +461,7 @@ async function routeApi(request, env, ctx, url) {
   }
   if (path === '/api/classes' && method === 'GET') {
     const u=await requireUser(request,env), org=await requireOrganizationContext(request,env,u), hasOrg=await tableHasColumn(env,'classes','organization_id');
-    const base=`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active'`;
+    const base=`SELECT c.*,cm.role member_role,(SELECT COUNT(*) FROM class_members x WHERE x.class_id=c.id AND x.status='active') member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND c.status!='deleted'`;
     const rows=hasOrg?await env.DB.prepare(`${base} AND COALESCE(c.organization_id,'sky-first')=? ORDER BY c.updated_at DESC`).bind(u.user_id,org).all():await env.DB.prepare(`${base} ORDER BY c.updated_at DESC`).bind(u.user_id).all();
     return ok({classes:rows.results||[],organization_id:hasOrg?org:'sky-first',schema_mode:hasOrg?'organization':'legacy'});
   }
@@ -479,9 +480,37 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env); const id=classMatch[1];
     const member=['school_admin','super_admin'].includes(u.role)?{role:u.role}:await env.DB.prepare(`SELECT role FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(id,u.user_id).first();
     if(!member) return bad('Bạn không thuộc lớp này.',403);
-    const cls=await env.DB.prepare(`SELECT c.*,u.full_name owner_name FROM classes c JOIN users u ON u.id=c.owner_user_id WHERE c.id=?`).bind(id).first();
-    const members=await env.DB.prepare(`SELECT cm.role,u.sfn_id,u.full_name,u.email FROM class_members cm JOIN users u ON u.id=cm.user_id WHERE cm.class_id=? AND cm.status='active' ORDER BY cm.role,u.full_name`).bind(id).all();
+    const cls=await env.DB.prepare(`SELECT c.*,u.full_name owner_name FROM classes c JOIN users u ON u.id=c.owner_user_id WHERE c.id=? AND c.status!='deleted'`).bind(id).first();
+    if(!cls) return bad('Không tìm thấy lớp.',404);
+    const members=await env.DB.prepare(`SELECT cm.user_id,cm.role,u.sfn_id,u.full_name,u.email FROM class_members cm JOIN users u ON u.id=cm.user_id WHERE cm.class_id=? AND cm.status='active' ORDER BY cm.role,u.full_name`).bind(id).all();
     return ok({class:cls,members:members.results,my_role:member.role});
+  }
+
+  const classMemberManage=path.match(/^\/api\/classes\/([^/]+)\/members(?:\/([^/]+))?$/);
+  if(classMemberManage && method==='POST'){
+    const u=await requireUser(request,env), classId=classMemberManage[1];
+    const cls=await env.DB.prepare(`SELECT owner_user_id,status FROM classes WHERE id=?`).bind(classId).first(); if(!cls||cls.status==='deleted')return bad('Không tìm thấy lớp.',404);
+    const mine=['super_admin','school_admin'].includes(u.role)?{role:u.role}:await env.DB.prepare(`SELECT role FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(classId,u.user_id).first();
+    if(!mine||(!['super_admin','school_admin'].includes(u.role)&&mine.role!=='teacher'))return bad('Chỉ giáo viên hoặc quản trị được thêm thành viên.',403);
+    const b=await request.json(), login=str(b.login), role=['teacher','assistant','student'].includes(b.role)?b.role:'student'; if(!login)return bad('Vui lòng nhập SFN ID hoặc email.');
+    const target=await env.DB.prepare(`SELECT id,sfn_id,full_name,email FROM users WHERE (lower(email)=lower(?) OR lower(sfn_id)=lower(?)) AND status='active' LIMIT 1`).bind(login,login).first(); if(!target)return bad('Không tìm thấy tài khoản đang hoạt động.',404);
+    await env.DB.prepare(`INSERT INTO class_members(class_id,user_id,role,status,joined_at) VALUES(?,?,?,'active',CURRENT_TIMESTAMP) ON CONFLICT(class_id,user_id) DO UPDATE SET role=excluded.role,status='active',joined_at=CURRENT_TIMESTAMP`).bind(classId,target.id,role).run();
+    await adminLog(env,u.user_id,'class.member_add',{class_id:classId,user_id:target.id,role}); return ok({member:target});
+  }
+  if(classMemberManage && method==='DELETE' && classMemberManage[2]){
+    const u=await requireUser(request,env), classId=classMemberManage[1], targetId=classMemberManage[2];
+    const cls=await env.DB.prepare(`SELECT owner_user_id,status FROM classes WHERE id=?`).bind(classId).first(); if(!cls||cls.status==='deleted')return bad('Không tìm thấy lớp.',404);
+    const mine=['super_admin','school_admin'].includes(u.role)?{role:u.role}:await env.DB.prepare(`SELECT role FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(classId,u.user_id).first();
+    if(!mine||(!['super_admin','school_admin'].includes(u.role)&&mine.role!=='teacher'))return bad('Chỉ giáo viên hoặc quản trị được xóa thành viên.',403);
+    if(targetId===cls.owner_user_id)return bad('Không thể xóa giáo viên sở hữu lớp.',409);
+    await env.DB.prepare(`UPDATE class_members SET status='removed' WHERE class_id=? AND user_id=?`).bind(classId,targetId).run(); await adminLog(env,u.user_id,'class.member_remove',{class_id:classId,user_id:targetId}); return ok();
+  }
+
+  const classDelete=path.match(/^\/api\/classes\/([^/]+)$/);
+  if(classDelete && method==='DELETE'){
+    const u=await requireUser(request,env), classId=classDelete[1]; const cls=await env.DB.prepare(`SELECT owner_user_id,name,status FROM classes WHERE id=?`).bind(classId).first(); if(!cls||cls.status==='deleted')return bad('Không tìm thấy lớp.',404);
+    if(!['super_admin','school_admin'].includes(u.role)&&cls.owner_user_id!==u.user_id)return bad('Chỉ giáo viên sở hữu lớp hoặc quản trị được xóa lớp.',403);
+    await env.DB.batch([env.DB.prepare(`UPDATE classes SET status='deleted',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(classId),env.DB.prepare(`UPDATE class_members SET status='removed' WHERE class_id=?`).bind(classId)]); await adminLog(env,u.user_id,'class.delete',{class_id:classId,name:cls.name}); return ok({deleted:true});
   }
 
   const joinMatch=path.match(/^\/api\/classes\/join$/);
@@ -801,7 +830,7 @@ async function routeApi(request, env, ctx, url) {
 
   if(path==='/api/admin/classes' && method==='GET'){
     await requireRole(request,env,['super_admin','school_admin']);
-    const rows=await env.DB.prepare(`SELECT c.id,c.name,c.unit,c.join_code,c.status,c.created_at,u.full_name owner_name,(SELECT COUNT(*) FROM class_members cm WHERE cm.class_id=c.id AND cm.status='active') member_count FROM classes c JOIN users u ON u.id=c.owner_user_id ORDER BY c.created_at DESC LIMIT 300`).all(); return ok({classes:rows.results||[]});
+    const rows=await env.DB.prepare(`SELECT c.id,c.name,c.unit,c.join_code,c.status,c.created_at,u.full_name owner_name,(SELECT COUNT(*) FROM class_members cm WHERE cm.class_id=c.id AND cm.status='active') member_count FROM classes c JOIN users u ON u.id=c.owner_user_id WHERE c.status!='deleted' ORDER BY c.created_at DESC LIMIT 300`).all(); return ok({classes:rows.results||[]});
   }
   const adminClass=path.match(/^\/api\/admin\/classes\/([^/]+)$/);
   if(adminClass && method==='PATCH'){
@@ -1289,7 +1318,7 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u);const rows=await env.DB.prepare(`SELECT ce.* FROM calendar_events ce WHERE ce.organization_id=? ORDER BY ce.starts_at LIMIT 200`).bind(org).all().catch(()=>({results:[]}));return ok({events:rows.results||[],organization_id:org});
   }
   if(path==='/api/resources' && method==='GET'){
-    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u),hasOrg=await tableHasColumn(env,'classes','organization_id');const base=`SELECT m.id,m.class_id,m.title,m.created_at,f.id file_id,f.name,f.mime,f.size,c.name class_name FROM materials m JOIN files f ON f.id=m.file_id JOIN classes c ON c.id=m.class_id JOIN class_members cm ON cm.class_id=m.class_id WHERE cm.user_id=? AND cm.status='active'`;const rows=hasOrg?await env.DB.prepare(`${base} AND COALESCE(c.organization_id,'sky-first')=? ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id,org).all():await env.DB.prepare(`${base} ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id).all();return ok({resources:rows.results||[],organization_id:hasOrg?org:'sky-first'});
+    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u),hasOrg=await tableHasColumn(env,'classes','organization_id');const base=`SELECT m.id,m.class_id,m.title,m.created_at,f.id file_id,f.name,f.mime,f.size,c.name class_name FROM materials m JOIN files f ON f.id=m.file_id JOIN classes c ON c.id=m.class_id JOIN class_members cm ON cm.class_id=m.class_id WHERE cm.user_id=? AND cm.status='active' AND c.status!='deleted'`;const rows=hasOrg?await env.DB.prepare(`${base} AND COALESCE(c.organization_id,'sky-first')=? ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id,org).all():await env.DB.prepare(`${base} ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id).all();return ok({resources:rows.results||[],organization_id:hasOrg?org:'sky-first'});
   }
 
   const fileMatch=path.match(/^\/api\/files\/([^/]+)$/);

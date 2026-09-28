@@ -1,6 +1,6 @@
 {
   "name": "sfn-slc",
-  "version": "24.9.0-p2-final-candidate",
+  "version": "24.9.1-p2-ai-restored-stable",
   "private": true,
   "type": "module",
   "scripts": {

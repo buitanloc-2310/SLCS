@@ -362,3 +362,65 @@ html{scroll-behavior:smooth}body{font-family:Inter,ui-sans-serif,system-ui,-appl
 .sfn-ai-launcher{background:linear-gradient(135deg,#1269b4,#2387d9)!important;color:#fff!important;border:0!important;box-shadow:0 14px 34px rgba(18,105,180,.28)!important}.sfn-ai-panel{border:1px solid #cfe2f0!important;background:#fff!important;box-shadow:0 24px 70px rgba(20,65,100,.22)!important}.sfn-ai-panel header{background:#eef8fe!important;border-bottom:1px solid #d8e9f4!important}.sfn-ai-panel nav{background:#fff!important;border-bottom:1px solid #e4eef5!important}.sfn-ai-panel nav button{border-radius:999px!important}.sfn-ai-panel form{border-top:1px solid #dfeaf2!important;background:#fbfdff!important}.sfn-ai-panel textarea{border:1px solid #d4e4ef!important;border-radius:14px!important;background:#fff!important}.sfn-ai-panel textarea:focus{outline:3px solid rgba(35,135,217,.12)!important;border-color:#62aadd!important}.sfn-ai-panel textarea:disabled{background:#f2f5f7!important;color:#8796a3!important}.sfn-ai-panel button:disabled{opacity:.45!important;cursor:not-allowed!important}.sfn-ai-msg{border:1px solid #e1edf5!important;border-radius:15px!important}.sfn-ai-msg.me{border-color:#1769c2!important;color:#fff!important}.ai-window-actions button,.ai-workspace-link{border:1px solid #d2e4f0!important;background:#fff!important;color:#1769c2!important;border-radius:9px!important}
 .meeting-app{background:#eaf5fb!important}.meeting-topbar{background:rgba(255,255,255,.96)!important;border-bottom:1px solid #d8e7f0!important}.meeting-main{background:#dfeef7!important}.meeting-stage{gap:12px!important}.meeting-tile{border-radius:18px!important;box-shadow:0 10px 28px rgba(15,55,85,.13)!important}.meeting-panel{background:#fff!important;border:1px solid #cfe0eb!important}.meeting-panel-tabs{grid-template-columns:repeat(3,minmax(0,1fr))!important}.meeting-panel-tabs button{background:#f3f8fb!important;color:#526d82!important}.meeting-panel-tabs button.active{background:#1769c2!important;color:#fff!important}.meeting-dock{background:rgba(255,255,255,.96)!important;border-top:1px solid #d6e5ef!important;backdrop-filter:blur(16px)}
 @media(max-width:760px){.topbar-inner{padding-inline:12px!important}.nav>button:not(.account-chip):not(.icon-nav){display:none}.main{padding-inline:12px!important}.sfn-ai-panel{inset:auto 8px 78px 8px!important;width:auto!important;max-height:76dvh!important}.sfn-ai-launcher{right:14px!important;bottom:18px!important}.meeting-panel-tabs{grid-template-columns:repeat(3,minmax(0,1fr))!important}}
+
+/* ===== SLC UI RECONSTRUCTION 2026-09-28 — visual-only, AI/logic untouched ===== */
+:root{
+ --bg:#eaf5fb;--bg2:#f6fbff;--card:#ffffff;--card2:#ffffff;
+ --text:#17324d;--muted:#667d91;--line:#d6e6f1;
+ --accent:#2387d9;--accent2:#2387d9;--accent3:#1269b4;
+ --shadow:0 12px 34px rgba(31,88,128,.08);--r:20px;
+}
+body:not(.meeting-body){background:linear-gradient(180deg,#eaf5fb 0,#f4faff 55%,#eaf5fb 100%)!important;color:#17324d!important;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif!important;letter-spacing:normal!important}
+body:not(.meeting-body) .main{width:min(1240px,calc(100% - 40px));margin:20px auto 42px!important}
+body:not(.meeting-body) .hero,body:not(.meeting-body) .dashboard-head,body:not(.meeting-body) .page-head,body:not(.meeting-body) .profile-head{background:#fff!important;background-image:none!important;color:#17324d!important;border:1px solid #d6e6f1!important;border-radius:22px!important;box-shadow:0 10px 30px rgba(31,88,128,.07)!important}
+body:not(.meeting-body) .hero:after{display:none!important}
+body:not(.meeting-body) h1,body:not(.meeting-body) h2,body:not(.meeting-body) h3,body:not(.meeting-body) h4,body:not(.meeting-body) h5,body:not(.meeting-body) h6{color:#143a5d!important;text-shadow:none!important;letter-spacing:normal}
+body:not(.meeting-body) .eyebrow{color:#1670c9!important}
+body:not(.meeting-body) .muted,body:not(.meeting-body) .field-help{color:#687f93!important}
+body:not(.meeting-body) .card,body:not(.meeting-body) .dash-card,body:not(.meeting-body) .class-card,body:not(.meeting-body) .settings-card,body:not(.meeting-body) .auth-card{background:#fff!important;background-image:none!important;color:#17324d!important;border:1px solid #d6e6f1!important;box-shadow:0 10px 28px rgba(31,88,128,.07)!important}
+body:not(.meeting-body) .auth-card{width:min(720px,100%);border-radius:24px!important}
+body:not(.meeting-body) .auth-card h1,body:not(.meeting-body) .auth-card h2,body:not(.meeting-body) .auth-card h3{color:#143a5d!important}
+body:not(.meeting-body) .field label{color:#365873!important;font-weight:750!important}
+body:not(.meeting-body) .field input,body:not(.meeting-body) .field select,body:not(.meeting-body) .field textarea,
+body:not(.meeting-body) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),body:not(.meeting-body) select,body:not(.meeting-body) textarea{background:#f8fbfe!important;color:#17324d!important;border:1px solid #cbddea!important;box-shadow:none!important;font-family:inherit!important}
+body:not(.meeting-body) input::placeholder,body:not(.meeting-body) textarea::placeholder{color:#8ba0b2!important;opacity:1}
+body:not(.meeting-body) input:focus,body:not(.meeting-body) select:focus,body:not(.meeting-body) textarea:focus{background:#fff!important;border-color:#4b9cda!important;outline:3px solid rgba(35,135,217,.12)!important}
+body:not(.meeting-body) select option{background:#fff!important;color:#17324d!important}
+body:not(.meeting-body) .btn,body:not(.meeting-body) button:not(.sfn-ai-launcher):not(.meeting-control):not(.meeting-manage-btn){font-family:inherit;letter-spacing:normal}
+body:not(.meeting-body) .btn{background:#f5f9fc!important;color:#234b6d!important;border:1px solid #cfe0eb!important;box-shadow:none!important}
+body:not(.meeting-body) .btn:hover{background:#eaf5fc!important;color:#1269b4!important}
+body:not(.meeting-body) .btn.primary{background:#2387d9!important;color:#fff!important;border-color:#2387d9!important;box-shadow:0 8px 20px rgba(35,135,217,.18)!important}
+body:not(.meeting-body) .btn.primary:hover{background:#176fba!important;color:#fff!important}
+body:not(.meeting-body) .pill{color:#267653!important;background:#edf9f2!important;border-color:#d5efdf!important}
+body:not(.meeting-body) .notice,body:not(.meeting-body) .item{background:#f7fbfe!important;color:#294b68!important;border-color:#d8e7f1!important}
+body:not(.meeting-body) .public-section{padding:28px!important;margin-top:20px!important;border-radius:22px!important}
+body:not(.meeting-body) .public-section .feature-card,body:not(.meeting-body) .public-section .story-card{border-radius:18px!important;padding:20px!important}
+body:not(.meeting-body) .topbar{position:sticky!important;top:0!important;background:rgba(255,255,255,.96)!important;backdrop-filter:blur(16px)!important}
+body:not(.meeting-body) .topbar-inner{padding:10px 18px!important}
+body:not(.meeting-body) .nav{flex-wrap:nowrap!important;overflow-x:auto;scrollbar-width:none}
+body:not(.meeting-body) .nav::-webkit-scrollbar{display:none}
+body:not(.meeting-body) .nav>button{white-space:nowrap;background:#f5f9fc!important;color:#274a68!important;border:1px solid #d6e6f1!important;border-radius:10px!important}
+body:not(.meeting-body) .nav>button:hover,body:not(.meeting-body) .nav>button.active{background:#e8f4fc!important;color:#1269b4!important;border-color:#bcd9eb!important}
+body:not(.meeting-body) .footer{background:#fff!important;border-color:#d6e6f1!important;color:#667d91!important}
+body:not(.meeting-body) .footer-inner{color:#667d91!important}
+/* AI: positioning only. No AI state, behavior or component logic is changed. */
+.sfn-ai-launcher{right:20px!important;bottom:20px!important;max-width:190px;min-height:48px}
+/* prevent pale-on-white text inherited from legacy themes */
+body:not(.meeting-body) .card *,body:not(.meeting-body) .dash-card *,body:not(.meeting-body) .class-card *,body:not(.meeting-body) .settings-card *{text-shadow:none}
+body:not(.meeting-body) .card h1,body:not(.meeting-body) .card h2,body:not(.meeting-body) .card h3,body:not(.meeting-body) .class-card h1,body:not(.meeting-body) .class-card h2,body:not(.meeting-body) .class-card h3,body:not(.meeting-body) .settings-card h1,body:not(.meeting-body) .settings-card h2,body:not(.meeting-body) .settings-card h3{color:#173a59!important;opacity:1!important}
+@media(max-width:760px){
+ body:not(.meeting-body) .main{width:100%!important;margin:0 auto 32px!important;padding:12px!important}
+ body:not(.meeting-body) .topbar-inner{padding:9px 12px!important;align-items:center!important}
+ body:not(.meeting-body) .brand{gap:8px!important}.brand img{width:38px!important;height:38px!important}.brand b{font-size:13px!important}.brand small{font-size:11px!important}
+ body:not(.meeting-body) .nav{margin-left:auto;max-width:120px}.nav>button:not(.account-chip):not(.icon-nav){display:none!important}.nav .icon-nav{display:inline-grid!important;place-items:center;width:42px!important;height:42px!important;padding:0!important}.account-chip{max-width:58px!important;overflow:hidden!important}
+ body:not(.meeting-body) .hero,body:not(.meeting-body) .dashboard-head,body:not(.meeting-body) .page-head,body:not(.meeting-body) .profile-head{padding:22px 18px!important;border-radius:20px!important}
+ body:not(.meeting-body) .hero h1,body:not(.meeting-body) .dashboard-head h1,body:not(.meeting-body) .page-head h1,body:not(.meeting-body) .profile-head h1{font-size:clamp(30px,9vw,42px)!important;line-height:1.08!important}
+ body:not(.meeting-body) .grid{gap:12px!important}.card,.card.wide{grid-column:1/-1!important}.card,.dash-card,.class-card,.settings-card,.auth-card{padding:18px!important;border-radius:18px!important}
+ body:not(.meeting-body) .two,body:not(.meeting-body) .three,body:not(.meeting-body) .story-grid,body:not(.meeting-body) .feature-grid{grid-template-columns:1fr!important}
+ body:not(.meeting-body) .toolbar{gap:8px!important}body:not(.meeting-body) .toolbar .btn{flex:1 1 auto;min-height:44px}
+ body:not(.meeting-body) .field{margin:10px 0!important}.field input,.field select,.field textarea{font-size:16px!important;min-height:48px!important}
+ body:not(.meeting-body) .public-section{padding:20px!important;margin-top:14px!important}.public-section .feature-card,.public-section .story-card{padding:17px!important}
+ .sfn-ai-launcher{right:12px!important;bottom:12px!important;min-height:46px!important;padding:10px 14px!important;max-width:170px!important}.sfn-ai-launcher b{font-size:12px!important}
+ .sfn-ai-panel{inset:auto 8px 68px 8px!important;width:auto!important;height:min(72dvh,620px)!important;max-height:calc(100dvh - 86px)!important;border-radius:18px!important}
+}
+@media(max-width:420px){body:not(.meeting-body) .brand small{display:none}.sfn-ai-launcher{max-width:150px!important}.sfn-ai-launcher b{font-size:11px!important}}

@@ -1,6 +1,6 @@
 {
   "name": "sfn-slc",
-  "version": "24.5.1-p2.5-ai-rollback",
+  "version": "24.9.0-p2-final-candidate",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,7 +18,8 @@
     "validate:p21": "npm run validate:p11 && node scripts/validate-p21.mjs",
     "validate:p22": "npm run validate:p21 && node scripts/validate-p22.mjs",
     "validate:p23": "npm run validate:p22 && node scripts/validate-p23.mjs",
-    "validate:p24": "npm run validate:p23 && npm run validate:p2 && node scripts/validate-p24.mjs"
+    "validate:p24": "npm run validate:p23 && npm run validate:p2 && node scripts/validate-p24.mjs",
+    "validate:final": "npm run validate:p24 && node scripts/validate-final.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.34.0"

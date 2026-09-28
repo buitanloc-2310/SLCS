@@ -12,5 +12,6 @@ const checks=[
  ['in-app browser guidance',cls.includes('inAppBrowser')&&cls.includes('Chrome/Safari')],
  ['server resource URL whitelist',api.includes("https?:\\/\\//i.test(urlv)")],
  ['client resource URL whitelist',cls.includes('safeHttpUrl')&&cls.includes("['http:','https:'].includes")],
+ ['AI absent from live',app.includes('AI is intentionally unavailable inside a live classroom')&&!app.includes('if(state.user)mountSkyFirstAI({user:state.user,api,classId,className:cls.name})')]
 ];
 let bad=0;for(const [n,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${n}`);if(!ok)bad++}if(bad){console.error(`${bad} P0 checks failed`);process.exit(1)}console.log(`${checks.length}/${checks.length} P0 hardening checks passed`);

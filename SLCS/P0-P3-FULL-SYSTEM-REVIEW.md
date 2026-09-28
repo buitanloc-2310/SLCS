@@ -8,6 +8,7 @@
 - Reworked More menu into role-aware sections and anchored it to its trigger with viewport collision handling.
 - Added System Admin shortcuts to Control Center; teachers/assistants/admins receive class-management actions while students keep personal actions.
 - Reworded technical/personal camera controls to natural Vietnamese in the live-room UI.
+- Hardened AI Markdown rendering against accidental escaped Markdown markers and repeated asterisk artifacts.
 - Kept technical infrastructure details behind System Admin boundaries.
 
 ## Validation

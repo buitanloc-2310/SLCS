@@ -1,6 +1,8 @@
 # SLC final candidate — verification status
 
+Baseline: SLCS-P2.5.1-AI-Restored(1).zip
 
+This build preserves the baseline feature set and adds a final UX canonical layer plus AI availability safeguards and a new-conversation control.
 
 Verified locally:
 - JavaScript syntax checks: PASS
@@ -14,3 +16,4 @@ Verified locally:
 - P2/config validators: PASS
 - Final feature-preservation audit: 30/30 PASS
 
+Production-only dependencies still require deployed-environment verification: Cloudflare D1/R2/SFU credentials, email provider credentials, AI provider credentials/network access, and real multi-device media behavior. No production-only item is falsely marked as runtime-tested here.

@@ -10,6 +10,10 @@ Build: `20.2.0-vplus-final`
 - Named import/export compatibility: **PASS**
 - Non-admin technical leakage checks: **PASS**
 - Secret identifier leakage checks: **PASS**
+- AI permission/research/action guards: **PASS**
+- AI Responses adapter mock: **PASS**
+- AI research web-tool graceful fallback mock: **PASS**
+- AI transient provider retry mock: **PASS**
 - Fresh SQLite migration chain 0001→0010: **PASS**
 - Fresh schema tables created: **64**
 - Optimized UI logo present: **PASS**
@@ -20,3 +24,4 @@ Build: `20.2.0-vplus-final`
 
 ## Important production boundary
 
+These checks validate source structure, syntax, migration compatibility, packaging and mocked AI adapter behavior. Real Cloudflare bindings, the `skyfirsthoc` Realtime application, browser devices/networks, and an actual OpenAI account/API key can only be fully verified after deployment. VPLUS therefore uses fail-safe user messages and keeps technical diagnostics restricted to System Admin.

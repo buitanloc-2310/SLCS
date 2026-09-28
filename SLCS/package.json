@@ -1,6 +1,6 @@
 {
   "name": "sfn-slc",
-  "version": "24.4.1-p0-p2.4-consolidated",
+  "version": "24.5.0-p2.5-consolidated",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,7 +18,8 @@
     "validate:p21": "npm run validate:p11 && node scripts/validate-p21.mjs",
     "validate:p22": "npm run validate:p21 && node scripts/validate-p22.mjs",
     "validate:p23": "npm run validate:p22 && node scripts/validate-p23.mjs",
-    "validate:p24": "npm run validate:p23 && npm run validate:p2 && node scripts/validate-p24.mjs"
+    "validate:p24": "npm run validate:p23 && npm run validate:p2 && node scripts/validate-p24.mjs",
+    "validate:p25": "npm run validate:p24 && node scripts/validate-p25.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.34.0"

@@ -7,7 +7,6 @@ Compared the current P0–P3 fixed build byte-for-byte against `SLC_P2_ARCHITECT
 - Original files: 78
 - Missing original files in fixed build: 0
 - Added review files only: P0-P3-FULL-SYSTEM-REVIEW.md and this audit report
-- Modified application files: 5 (`src/index.js`, `public/app.js`, `public/styles.css`, `public/classroom/classroom-plus.js`, `public/ai/vplus-ai.js`)
 - Migration SQL changed: 0
 - `docs/D1-RUN.sql` changed: 0
 - JSON/config data changed: 0

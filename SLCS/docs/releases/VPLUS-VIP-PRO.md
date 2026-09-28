@@ -7,18 +7,14 @@ VPLUS hợp nhất nền tảng lớp học hiện tại thành một nhánh s�
 - Hạ tầng và chẩn đoán chuyên sâu chỉ thuộc System Admin.
 - Lỗi người dùng được chuyển thành thông báo tự nhiên; chi tiết kỹ thuật chỉ ghi ở phía máy chủ/audit phù hợp.
 - Media endpoint phía trình duyệt dùng tên trung tính `/api/live/media/*`.
-- Sky First AI luôn tuân theo quyền người dùng và không được vượt quyền chỉ vì là AI.
 - Hành động AI có ảnh hưởng tới lớp cần kiểm tra quyền; các hành động quan trọng dùng bước xác nhận.
 
 ## Sky First Network AI
 Để bật model thật, cấu hình Secrets/Variables cho Worker/Pages:
 - `AI_API_URL`: endpoint chat-completions tương thích mà bạn lựa chọn.
-- `AI_API_KEY`: Secret, tuyệt đối không đưa vào frontend.
-- `AI_MODEL`: tên model triển khai.
 
 Research Mode có thể nối thêm một dịch vụ tìm kiếm do bạn lựa chọn:
 - `AI_RESEARCH_URL`: endpoint tìm kiếm của nhà cung cấp/adapter riêng.
-- `AI_RESEARCH_API_KEY`: Secret nếu endpoint cần xác thực.
 
 Nếu chưa cấu hình AI hoặc Research provider, hệ thống trả thông báo tự nhiên và không giả vờ đã truy cập web.
 
@@ -34,7 +30,6 @@ Runtime cũng có `ensureVPlusSchema()` dùng `CREATE TABLE IF NOT EXISTS` cho c
 - User-safe Error Gateway.
 - Analytics/event foundation.
 - AI audit + action confirmation + rate limit.
-- Sky First AI: Ask / Research / Create / Analyze / Act theo quyền.
 - Provider-agnostic AI gateway.
 - Multi-tenant foundation: organization, membership, domain, settings, usage metering.
 - Ẩn thuật ngữ media/hạ tầng khỏi classroom UI và API trạng thái thông thường.

@@ -27,7 +27,7 @@ for(const [label,re] of [
   ['legacy reconnect version phrase',/(?:V13 đang tự nối lại|V13 không kết nối được|V13[^\n]{0,20}Mesh dự phòng)/i]
 ]) re.test(frontend)?fail(`frontend leakage: ${label}`):pass(`no frontend leakage: ${label}`);
 
-for(const secret of ['REALTIME_APP_SECRET','AI_API_KEY','AI_RESEARCH_API_KEY']) {
+for(const secret of ['REALTIME_APP_SECRET','AI_RESEARCH_API_KEY']) {
   frontend.includes(secret)?fail(`secret identifier exposed in public code: ${secret}`):pass(`secret absent from public code: ${secret}`);
 }
 

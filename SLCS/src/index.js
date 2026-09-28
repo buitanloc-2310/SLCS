@@ -3,7 +3,6 @@ import { V11_SCHEMA_STAGES } from './schema-v11.js';
 import { realtimeSfuConfig, createRealtimeSession, addRealtimeTracks, renegotiateRealtimeSession, closeRealtimeTracks, ensureRealtimeSfuSchema } from './realtime-sfu.js';
 import { ensureV13Schema, getClassLiveSettings, safeJson, logLiveEvent } from './v13-platform.js';
 import { VPLUS, ensureVPlusSchema, recordPlatformEvent, hasPermission, requirePermission, safeUserMessage } from './vplus-platform.js';
-import { auditAi, aiConfigured, aiProviderConfig, aiSupportsNativeResearch, callAiProvider, testAiAuthentication, aiKeyDiagnostic, buildAiSystemPrompt, consumeAiQuota, fetchResearchSources, parseAiAction, moderateAiInput } from './ai/service.js';
 export { LiveRoom };
 
 const SECURITY_HEADERS = {'x-content-type-options':'nosniff','referrer-policy':'strict-origin-when-cross-origin','x-frame-options':'SAMEORIGIN','permissions-policy':'camera=(self), microphone=(self), display-capture=(self), geolocation=()','cross-origin-opener-policy':'same-origin-allow-popups'};
@@ -1061,136 +1060,6 @@ async function routeApi(request, env, ctx, url) {
     return ok({attendance:{visits:Number(attendance?.visits||0),participants:Number(attendance?.participants||0),average_minutes:Number(attendance?.avg_minutes||0)},events:events.results||[],polls:{count:Number(polls?.polls||0),answers:Number(polls?.answers||0)}});
   }
 
-  if(path==='/api/admin/ai/status' && method==='GET'){
-    await requireRole(request,env,['super_admin']); await ensureVPlusSchema(env);
-    const cfg=aiProviderConfig(env);
-    const recent=await env.DB.prepare(`SELECT status,COUNT(*) n FROM ai_audit WHERE datetime(created_at)>=datetime('now','-24 hours') GROUP BY status`).all().catch(()=>({results:[]}));
-    const last=await env.DB.prepare(`SELECT mode,action,status,detail_json,created_at FROM ai_audit ORDER BY created_at DESC LIMIT 1`).first().catch(()=>null);
-    const key=await aiKeyDiagnostic(env);
-    return ok({configured:cfg.configured,provider:cfg.provider,model:cfg.model||null,endpoint:cfg.url?(()=>{try{return new URL(cfg.url).origin}catch{return 'configured'}})():null,native_web_search:cfg.nativeWebSearch,timeout_ms:cfg.timeoutMs,key_present:key.present,activity_24h:recent.results||[],last:last?{mode:last.mode,action:last.action,status:last.status,created_at:last.created_at}:null});
-  }
-
-  if(path==='/api/admin/ai/test' && method==='POST'){
-    await requireRole(request,env,['super_admin']); const started=Date.now(); const cfg=aiProviderConfig(env); const u=await requireUser(request,env);
-    if(!cfg.configured)return bad('Sky First AI chưa được cấu hình đầy đủ.',503,{code:'AI_NOT_READY',auth:{ok:false,status:0,code:'AI_KEY_MISSING'}});
-    const auth=await testAiAuthentication(env);
-    if(!auth.ok){
-      await auditAi(env,{userId:u.user_id,mode:'ask',action:'provider_auth_test',status:'error',detail:{code:auth.code,provider_status:auth.status||null,latency_ms:Date.now()-started}});
-      return bad('Kiểm tra Sky First AI chưa thành công.',503,{code:auth.code,provider_status:auth.status||null,auth:{ok:false,status:auth.status||null,code:auth.code,error_code:auth.error_code||null,me:auth.me?{ok:auth.me.ok,status:auth.me.status,error_code:auth.me.error_code||null}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status,error_code:auth.models.error_code||null}:null},detail:String(auth.detail||'').slice(0,600),latency_ms:Date.now()-started});
-    }
-    try{
-      const result=await callAiProvider(env,{messages:[{role:'system',content:'Bạn đang thực hiện kiểm tra kết nối nội bộ. Trả lời thật ngắn.'},{role:'user',content:'Trả lời đúng cụm từ: SKY FIRST AI READY'}],maxTokens:48});
-      await auditAi(env,{userId:u.user_id,mode:'ask',action:'provider_test',status:'ok',detail:{provider:cfg.provider,model:cfg.model,auth_status:auth.status,latency_ms:Date.now()-started}});
-      return ok({ready:true,latency_ms:Date.now()-started,provider:cfg.provider,model:cfg.model,response:String(result.text).slice(0,160),native_web_search:cfg.nativeWebSearch,key_present:true,auth:{ok:true,status:auth.status,code:auth.code,me:auth.me?{ok:auth.me.ok,status:auth.me.status}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status}:null},responses:{ok:true}});
-    }catch(e){
-      await auditAi(env,{userId:u.user_id,mode:'ask',action:'provider_test',status:'error',detail:{code:String(e?.message||'AI_ERROR'),provider_status:e?.providerStatus||null,auth_status:auth.status,latency_ms:Date.now()-started}});
-      return bad('Kiểm tra Sky First AI chưa thành công.',503,{code:String(e?.message||'AI_ERROR'),provider_status:e?.providerStatus||null,auth:{ok:true,status:auth.status,code:auth.code,me:auth.me?{ok:auth.me.ok,status:auth.me.status}:null,models:auth.models?{ok:auth.models.ok,status:auth.models.status}:null},responses:{ok:false,status:e?.providerStatus||null},detail:String(e?.internalDetail||'').slice(0,600),latency_ms:Date.now()-started});
-    }
-  }
-
-  if(path==='/api/ai/capabilities' && method==='GET'){
-    const u=await requireUser(request,env);
-    return ok({available:aiConfigured(env),modes:['ask','research','create',...(hasPermission(u,'ai.analyze.class')||hasPermission(u,'ai.analyze.school')?['analyze']:[]),...(hasPermission(u,'ai.act.class')?['act']:[])]});
-  }
-
-  if(path==='/api/ai/chat' && method==='POST'){
-    const u=await requireUser(request,env); requirePermission(u,'ai.ask'); await ensureVPlusSchema(env); await consumeAiQuota(env,u.user_id);
-    const b=await request.json(); const message=str(b.message).slice(0,8000); const mode=['ask','research','create','analyze','act'].includes(str(b.mode))?str(b.mode):'ask'; const classId=str(b.class_id)||null;
-    if(message.length<1)return bad('Vui lòng nhập nội dung bạn muốn hỏi.');
-    const safety=moderateAiInput(message); if(!safety.allowed){await auditAi(env,{userId:u.user_id,classId,mode,action:'safety_block',status:'blocked',detail:{category:safety.category}}).catch(()=>{});return bad(safety.message,422,{code:'AI_CONTENT_RESTRICTED'});}
-    if(mode==='analyze' && !(hasPermission(u,'ai.analyze.class')||hasPermission(u,'ai.analyze.school'))) return bad('Bạn không có quyền sử dụng chế độ phân tích này.',403);
-    if(mode==='act' && !hasPermission(u,'ai.act.class')) return bad('Bạn không có quyền sử dụng chế độ thực hiện trong lớp.',403);
-    let classInfo=null,contextText=''; const sources=[];
-    if(classId){
-      if(!['super_admin','school_admin'].includes(u.role)) await requireClassMember(env,classId,u.user_id);
-      classInfo=await env.DB.prepare(`SELECT id,name,unit FROM classes WHERE id=?`).bind(classId).first();
-      if(!classInfo)return bad('Không tìm thấy lớp học.',404);
-      const resources=await env.DB.prepare(`SELECT title,url,resource_type,pinned FROM live_resources WHERE class_id=? ORDER BY pinned DESC,created_at DESC LIMIT 20`).bind(classId).all().catch(()=>({results:[]}));
-      const polls=await env.DB.prepare(`SELECT question,status FROM live_polls WHERE class_id=? ORDER BY created_at DESC LIMIT 8`).bind(classId).all().catch(()=>({results:[]}));
-      const bits=[];
-      if(resources.results?.length){bits.push('Tài nguyên lớp được phép tham chiếu: '+resources.results.map(x=>`${x.title}${x.resource_type?` [${x.resource_type}]`:''}`).join('; ')); for(const x of resources.results){if(/^https?:\/\//i.test(String(x.url||''))) sources.push({index:sources.length+1,title:x.title,url:x.url,snippet:'Tài nguyên được ghim/cung cấp trong lớp học.',origin:'internal'});}}
-      if(polls.results?.length) bits.push('Poll gần đây: '+polls.results.map(x=>`${x.question} (${x.status})`).join('; '));
-      if((mode==='analyze'||mode==='act')&&['teacher','assistant','school_admin','super_admin'].includes(u.role)){
-        const att=await env.DB.prepare(`SELECT COUNT(DISTINCT user_key) participants,ROUND(AVG((julianday(COALESCE(left_at,last_seen))-julianday(joined_at))*1440),1) avg_minutes FROM live_attendance WHERE class_id=?`).bind(classId).first().catch(()=>null);
-        const evt=await env.DB.prepare(`SELECT event_type,COUNT(*) n FROM live_room_events WHERE class_id=? AND datetime(created_at)>=datetime('now','-7 days') GROUP BY event_type ORDER BY n DESC LIMIT 12`).bind(classId).all().catch(()=>({results:[]}));
-        if(att) bits.push(`Tổng hợp tham gia: ${Number(att.participants||0)} người; thời lượng trung bình ${Number(att.avg_minutes||0)} phút.`);
-        if(evt.results?.length) bits.push('Tương tác 7 ngày: '+evt.results.map(x=>`${x.event_type}: ${x.n}`).join('; '));
-      }
-      contextText=bits.join('\n');
-    } else if(mode==='analyze' && u.role==='super_admin'){
-      const [users,classes,incidents]=await Promise.all([
-        env.DB.prepare(`SELECT COUNT(*) n FROM users WHERE status='active'`).first().catch(()=>({n:0})),
-        env.DB.prepare(`SELECT COUNT(*) n FROM classes WHERE status='active'`).first().catch(()=>({n:0})),
-        env.DB.prepare(`SELECT severity,COUNT(*) n FROM system_incidents WHERE datetime(created_at)>=datetime('now','-24 hours') GROUP BY severity`).all().catch(()=>({results:[]}))
-      ]);
-      contextText=`Tổng hợp nền tảng được phép cho System Admin: ${Number(users?.n||0)} tài khoản hoạt động; ${Number(classes?.n||0)} lớp hoạt động; sự cố 24 giờ: ${(incidents.results||[]).map(x=>`${x.severity}:${x.n}`).join(', ')||'không ghi nhận'}.`;
-    }
-    const skyFirstQuery=/(sky\s*first|skyfirst|trung tam hoc tap so|chu tich|chu nhiem|sfec|nha han ngu|ctt\.|tnv\.|game\.skyfirst|sky first network)/i.test(message.normalize('NFD').replace(/[\u0300-\u036f]/g,''));
-    if(skyFirstQuery){
-      contextText += `${contextText?'\n':''}NGUỒN CHÍNH THỨC SKY FIRST NETWORK (ưu tiên xác minh trước mọi nguồn khác):\n- Trang điện tử: https://skyfirst.io.vn\n- Cổng thông tin: https://ctt.skyfirst.io.vn\n- Tình nguyện viên: https://tnv.skyfirst.io.vn\n- Sky First Play: https://game.skyfirst.io.vn\n- Facebook chính thức: https://facebook.com/skyfirstnetwork\n- TikTok chính thức: https://tiktok.com/@skyfirstnetwork\n- Instagram chính thức: https://instagram.com/skyfirstnetwork\nKhi câu hỏi liên quan Sky First Network, hãy chủ động dùng tìm kiếm web nếu kiến thức hiện có chưa đủ; ưu tiên các nguồn chính thức trên, đối chiếu ít nhất một nguồn khác khi thông tin có tính nhân sự/chức danh hoặc có khả năng thay đổi. Không tự suy đoán hoặc lưu vĩnh viễn thông tin chưa xác minh.`;
-    }
-    if(mode==='research'){
-      const found=await fetchResearchSources(env,message);
-      sources.push(...found.map(x=>({...x,origin:'web'})));
-      if(found.length){contextText += `${contextText?'\n':''}Nguồn nghiên cứu được hệ thống cung cấp:\n`+found.map(x=>`[${x.index}] ${x.title}\n${x.url}\n${x.snippet}`).join('\n\n');}
-      else if(aiSupportsNativeResearch(env)) contextText += `${contextText?'\n':''}Bạn được phép sử dụng công cụ tìm kiếm web tích hợp cho lượt nghiên cứu này. Chỉ nêu thông tin bạn thực sự tìm thấy.`;
-      else contextText += `${contextText?'\n':''}Chưa có nguồn web trực tiếp được cung cấp cho lượt này. Không được giả vờ đã duyệt web.`;
-    }
-    let conversationId=str(b.conversation_id);
-    if(conversationId){const own=await env.DB.prepare(`SELECT id FROM ai_conversations WHERE id=? AND user_id=?`).bind(conversationId,u.user_id).first();if(!own)conversationId='';}
-    if(!conversationId){conversationId=crypto.randomUUID();await env.DB.prepare(`INSERT INTO ai_conversations(id,user_id,class_id,mode,title,created_at,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`).bind(conversationId,u.user_id,classId,mode,message.slice(0,80)).run();}
-    const history=await env.DB.prepare(`SELECT role,content FROM ai_messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 30`).bind(conversationId).all();
-    const system=buildAiSystemPrompt({user:u,classInfo,mode,contextText}); const msgs=[{role:'system',content:system},...(history.results||[]).reverse().map(x=>({role:x.role==='assistant'?'assistant':'user',content:x.content})),{role:'user',content:message}];
-    await env.DB.prepare(`INSERT INTO ai_messages(id,conversation_id,role,content,created_at) VALUES(?,?, 'user',?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),conversationId,message).run();
-    try{
-      const result=await callAiProvider(env,{messages:msgs,maxTokens:(mode==='research'||skyFirstQuery)?1900:1500,webSearch:mode==='research'||skyFirstQuery});
-      if(Array.isArray(result.sources)&&result.sources.length){const seen=new Set(sources.map(x=>x.url));for(const src of result.sources){if(src.url&&!seen.has(src.url)){sources.push({...src,index:sources.length+1,origin:skyFirstQuery&&/skyfirst\.io\.vn|facebook\.com\/skyfirstnetwork|tiktok\.com\/@skyfirstnetwork|instagram\.com\/skyfirstnetwork/i.test(src.url)?'official':'web'});seen.add(src.url)}}}
-      let answer=result.text,pendingAction=null;
-      if(mode==='act'&&classId){
-        const parsed=parseAiAction(result.text);
-        if(parsed){
-          answer=parsed.message; const actionId=crypto.randomUUID(); const expires=new Date(Date.now()+10*60*1000).toISOString();
-          await env.DB.prepare(`INSERT INTO ai_action_requests(id,user_id,class_id,action_key,payload_json,risk_level,status,expires_at,created_at) VALUES(?,?,?,?,?,'normal','pending',?,CURRENT_TIMESTAMP)`).bind(actionId,u.user_id,classId,parsed.action.key,JSON.stringify(parsed.action.payload||{}),expires).run();
-          pendingAction={id:actionId,key:parsed.action.key,summary:parsed.message,expires_at:expires};
-        }
-      }
-      await env.DB.batch([
-        env.DB.prepare(`INSERT INTO ai_messages(id,conversation_id,role,content,citations_json,created_at) VALUES(?,?, 'assistant',?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),conversationId,answer,JSON.stringify(sources)),
-        env.DB.prepare(`UPDATE ai_conversations SET mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(mode,conversationId)
-      ]);
-      await auditAi(env,{userId:u.user_id,classId,mode,action:pendingAction?'prepare_action':'chat',status:'ok',detail:{chars:message.length,action:pendingAction?.key||null,sources:sources.length}}); await recordPlatformEvent(env,{classId,userId:u.user_id,type:'ai.used',source:'ai',detail:{mode}});
-      return ok({conversation_id:conversationId,answer,sources,pending_action:pendingAction});
-    }catch(e){await auditAi(env,{userId:u.user_id,classId,mode,action:'chat',status:'error',detail:{code:String(e?.message||'AI_ERROR')}});return bad(safeUserMessage(e,'Sky First AI tạm thời chưa thể phản hồi. Vui lòng thử lại sau.'),e?.status||503);}
-  }
-
-  const aiActionConfirm=path.match(/^\/api\/ai\/actions\/([^/]+)\/confirm$/);
-  if(aiActionConfirm && method==='POST'){
-    const u=await requireUser(request,env); await ensureVPlusSchema(env);
-    const row=await env.DB.prepare(`SELECT * FROM ai_action_requests WHERE id=? AND user_id=? AND status='pending' AND expires_at>CURRENT_TIMESTAMP`).bind(aiActionConfirm[1],u.user_id).first();
-    if(!row)return bad('Yêu cầu xác nhận đã hết hạn hoặc không còn khả dụng.',404);
-    if(!hasPermission(u,'ai.act.class'))return bad('Bạn không có quyền thực hiện thao tác này.',403);
-    if(!['super_admin','school_admin'].includes(u.role))await requireClassMember(env,row.class_id,u.user_id,['teacher','assistant']);
-    const payload=safeJson(row.payload_json,{}); let result={};
-    if(row.action_key==='create_poll'){
-      const question=str(payload.question).slice(0,300); const options=(Array.isArray(payload.options)?payload.options:[]).map(x=>str(x).slice(0,180)).filter(Boolean).slice(0,8);
-      if(question.length<2||options.length<2)return bad('Nội dung poll chưa đủ để tạo.'); const id=crypto.randomUUID();
-      await env.DB.prepare(`INSERT INTO live_polls(id,class_id,question,options_json,anonymous,status,created_by,created_at) VALUES(?,?,?,?,?,'open',?,CURRENT_TIMESTAMP)`).bind(id,row.class_id,question,JSON.stringify(options),payload.anonymous?1:0,u.user_id).run(); result={id,kind:'poll'}; await logLiveEvent(env,row.class_id,'poll.created',`user:${u.user_id}`,u.full_name,{id,question});
-    }else if(row.action_key==='add_resource'){
-      const title=str(payload.title).slice(0,160),urlv=str(payload.url).slice(0,1200); if(!title||!/^https?:\/\//i.test(urlv))return bad('Tài nguyên cần tên và liên kết hợp lệ.'); const id=crypto.randomUUID();
-      await env.DB.prepare(`INSERT INTO live_resources(id,class_id,title,url,resource_type,pinned,created_by,created_at) VALUES(?,?,?,?, 'link',1,?,CURRENT_TIMESTAMP)`).bind(id,row.class_id,title,urlv,u.user_id).run(); result={id,kind:'resource'}; await logLiveEvent(env,row.class_id,'resource.added',`user:${u.user_id}`,u.full_name,{id,title});
-    }else if(row.action_key==='update_class_policy'){
-      await ensureV13Schema(env); const allowed=['allow_student_mic','allow_student_camera','allow_student_share','allow_chat','allow_reactions']; const updates=[]; const values=[];
-      for(const k of allowed)if(k in payload){updates.push(`${k}=?`);values.push(payload[k]?1:0)} if(!updates.length)return bad('Không có cài đặt phù hợp để thay đổi.');
-      values.push(u.user_id,row.class_id); await env.DB.prepare(`UPDATE class_live_settings SET ${updates.join(',')},updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE class_id=?`).bind(...values).run(); result={kind:'class_policy',changed:updates.length}; await logLiveEvent(env,row.class_id,'settings.updated',`user:${u.user_id}`,u.full_name,{source:'ai'});
-    }else return bad('Thao tác này chưa được hỗ trợ.',400);
-    await env.DB.prepare(`UPDATE ai_action_requests SET status='confirmed',confirmed_at=CURRENT_TIMESTAMP WHERE id=?`).bind(row.id).run(); await auditAi(env,{userId:u.user_id,classId:row.class_id,mode:'act',action:row.action_key,status:'confirmed',detail:result}); await recordPlatformEvent(env,{classId:row.class_id,userId:u.user_id,type:'ai.action.confirmed',source:'ai',detail:{action:row.action_key}}); return ok({message:'Đã thực hiện thao tác.',result});
-  }
-
-  const aiActionCancel=path.match(/^\/api\/ai\/actions\/([^/]+)\/cancel$/);
-  if(aiActionCancel && method==='POST'){
-    const u=await requireUser(request,env); await ensureVPlusSchema(env); await env.DB.prepare(`UPDATE ai_action_requests SET status='cancelled' WHERE id=? AND user_id=? AND status='pending'`).bind(aiActionCancel[1],u.user_id).run(); return ok({message:'Đã hủy thao tác.'});
-  }
-
   if(path==='/api/notifications' && method==='GET'){
     const u=await requireUser(request,env); const rows=await env.DB.prepare(`SELECT * FROM notification_center WHERE user_id=? OR user_id IS NULL ORDER BY created_at DESC LIMIT 50`).bind(u.user_id).all(); return ok({notifications:rows.results||[]});
   }
@@ -1214,7 +1083,6 @@ async function routeApi(request, env, ctx, url) {
     add('Durable Object LIVE_ROOM',!!env.LIVE_ROOM,env.LIVE_ROOM?'Binding LIVE_ROOM đã có':'Thiếu binding LIVE_ROOM');
     {const sf=realtimeSfuConfig(env);add('Realtime SFU / skyfirsthoc',sf.configured,sf.configured?`Đã cấu hình ${sf.appName}`:'Thiếu REALTIME_APP_ID hoặc REALTIME_APP_SECRET');}
     {const mc=mailConfig(env);add('Dịch vụ email',!!mc.key,mc.key?`Đã cấu hình gửi từ ${mc.from}`:'Chưa cấu hình khóa gửi email');}
-    {const ai=aiProviderConfig(env);add('Sky First AI',ai.configured,ai.configured?`Provider ${ai.provider}; model ${ai.model}`:'Thiếu AI_API_KEY hoặc cấu hình provider/model');}
     add('Setup token',!!env.SETUP_TOKEN,env.SETUP_TOKEN?'SETUP_TOKEN đã cấu hình':'Nên cấu hình SETUP_TOKEN để bảo vệ khởi tạo');
     const failed=checks.filter(x=>!x.ok).length; return ok({version:'VPLUS',status:failed?'attention':'healthy',failed,checks,time:nowIso()});
   }

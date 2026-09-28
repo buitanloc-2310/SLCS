@@ -10,13 +10,13 @@ const pass=m=>passes.push(m);
 const fail=m=>failures.push(m);
 
 const required=[
-  'src/index.js','src/live-room.js','src/realtime-sfu.js','src/vplus-platform.js','src/ai/service.js',
+  'src/index.js','src/live-room.js','src/realtime-sfu.js','src/vplus-platform.js',
   'public/app.js','public/classroom/media-client.js','public/classroom/classroom-plus.js',
-  'public/ai/vplus-ai.js','migrations/0010_vplus_foundation.sql','wrangler.json'
+  'migrations/0010_vplus_foundation.sql','wrangler.json'
 ];
 for(const f of required) exists(f)?pass(`required: ${f}`):fail(`missing: ${f}`);
 
-const frontendFiles=['public/app.js','public/classroom/media-client.js','public/classroom/classroom-plus.js','public/ai/vplus-ai.js'];
+const frontendFiles=['public/app.js','public/classroom/media-client.js','public/classroom/classroom-plus.js'];
 const frontend=frontendFiles.map(f=>read(f)).join('\n');
 for(const [label,re] of [
   ['old SFU API path',/\/api\/live\/sfu\//i],
@@ -32,7 +32,6 @@ for(const secret of ['REALTIME_APP_SECRET','AI_API_KEY','AI_RESEARCH_API_KEY']) 
 }
 
 const app=read('public/app.js');
-app.includes("import('/ai/vplus-ai.js')")?pass('AI client is lazy-loaded'):fail('AI client lazy-load missing');
 app.includes("import('/classroom/media-client.js?v=")?pass('media client is lazy-loaded'):fail('media client lazy-load missing');
 app.includes("if(!wsOnline&&!document.hidden)loadHttpChat()")?pass('HTTP chat polling is fallback-only'):fail('chat polling optimization missing');
 app.includes("state.user.role==='super_admin'?'<button class=\"btn\" data-admin-tab=\"system\"")
@@ -41,13 +40,11 @@ app.includes("state.user?.role!=='super_admin') document.querySelector('#adm-sys
   ? pass('system pane removed for non-system-admin') : fail('system pane removal gate not found');
 
 const server=read('src/index.js');
-for(const route of ['/api/admin/system/diagnostics','/api/admin/system/live-metrics','/api/admin/ai/status','/api/admin/ai/test']) {
+for(const route of ['/api/admin/system/diagnostics','/api/admin/system/live-metrics']) {
   server.includes(route)?pass(`system endpoint exists: ${route}`):fail(`system endpoint missing: ${route}`);
 }
 if(/path === '\/api\/health'[\s\S]{0,180}service:'Sky First School', status:'available'/.test(server)) pass('public health endpoint is minimal');
 else fail('public health endpoint is not minimal as expected');
-
-const ai=read('src/ai/service.js');
 
 const indexHtml=read('public/index.html');
 indexHtml.includes('qrcode.min.js')?fail('QR library is still render-blocking'):pass('QR library is not render-blocking');
@@ -56,14 +53,6 @@ exists('public/_headers')?pass('Pages static cache headers exist'):fail('Pages s
 app.includes('const _apiInflight=new Map()')?pass('duplicate GET request coalescing enabled'):fail('GET request coalescing missing');
 app.includes('loadQrLibrary')?pass('QR library lazy loader enabled'):fail('QR lazy loader missing');
 app.includes("if(!document.hidden)discoverSfuTracks()")?pass('hidden-page SFU discovery suppression enabled'):fail('SFU hidden-page suppression missing');
-ai.includes("if(usedWeb&&[400,404,422].includes(r.status))")?pass('AI research graceful fallback enabled'):fail('AI research graceful fallback missing');
-ai.includes("if([500,502,503,504].includes(r.status))")?pass('AI transient retry enabled'):fail('AI transient retry missing');
-ai.includes('export function aiApiKey')&&ai.includes('OPENAI_API_KEY')?pass('AI API key aliases are normalized before auth'):fail('AI API key normalization missing');
-ai.includes('https://api.openai.com/v1/models')?pass('OpenAI auth probe exists'):fail('OpenAI auth probe missing');
-server.includes('testAiAuthentication')?pass('System Admin AI test separates authentication'):fail('AI auth diagnostic route missing');
-for(const token of ['consumeAiQuota','auditAi','fetchResearchSources','aiProviderConfig','aiSupportsNativeResearch','openai_responses','web_search'])
-  ai.includes(token)?pass(`AI service present: ${token}`):fail(`AI service missing: ${token}`);
-for(const token of ['hasPermission','requirePermission']) server.includes(token)?pass(`AI route guard present: ${token}`):fail(`AI route guard missing: ${token}`);
 
 // Resolve static relative imports and /public imports in JS modules.
 function walk(dir){

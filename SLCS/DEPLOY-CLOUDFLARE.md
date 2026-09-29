@@ -1,38 +1,34 @@
-# Cloudflare Pages deployment — SLC V10 Pages Edition
+# Deploy Cloudflare — SLCS V40 Production
 
-## Màn Build configuration
+## Project root
+Sau khi giải nén, dùng thư mục trong cùng `SLCS/SLCS` làm root.
 
-```text
-Framework preset: None
-Build command: npm install && npm run check
-Build output directory: public
-Root directory: SFN-SLC-VIPPRO
-```
+## Cloudflare Pages
+- Framework preset: **None**
+- Build command: `npm install && npm run validate:production`
+- Build output directory: `public`
 
-Bản Pages Edition có thư mục `/functions`, vì vậy Cloudflare sẽ tự deploy Pages Functions cùng site public.
+Thư mục `/functions` được Cloudflare Pages deploy cùng site và route `/api/*` đã được khai báo trong `public/_routes.json`.
 
-## Sau khi deploy
+## Bindings hiện có trong `wrangler.json`
+- D1: `DB` -> `skyfirsthoctap`
+- R2: `FILES` -> `skyfirsthoctap`
 
-1. Kiểm tra `/api/health` phải trả JSON.
-2. Kiểm tra `/api/setup/status`.
-3. Đặt secret `SETUP_TOKEN`.
-4. Đặt `RESEND_API_KEY` nếu dùng email.
-5. Mở website và chạy khởi tạo lần đầu.
+## Secrets / variables cần cấu hình
+Không ghi secret vào source hoặc commit Git.
+- `SETUP_TOKEN` — bắt buộc cho khởi tạo/cài schema lần đầu.
+- `RESEND_API_KEY` — cần nếu dùng gửi email.
+- `REALTIME_APP_ID` và `REALTIME_APP_SECRET` — cần khi bật Cloudflare Realtime SFU.
+- `BEAUTY_OWNER_USER_ID` — tùy chọn nếu dùng entitlement Beauty riêng.
 
-D1 và R2 đã được khai báo trong `wrangler.json` với binding `DB` và `FILES`.
+Các biến không nhạy cảm như `APP_URL`, `SUPPORT_EMAIL`, `APP_NAME`, `MAIL_FROM`, `REALTIME_API_BASE`, `REALTIME_APP_NAME` đã có cấu hình mặc định trong `wrangler.json`.
 
-Riêng realtime WebSocket cần Durable Object external binding theo giới hạn của Cloudflare Pages.
+## Thứ tự production
+1. `npm install`
+2. `npm run validate:production`
+3. Cấu hình bindings/secrets trên Cloudflare.
+4. `npm run db:migrate`
+5. `npm run deploy`
+6. Kiểm tra `/api/health`, `/api/setup/status`, đăng nhập, Dashboard, lớp học, Assessment, Control Center và một phiên Live Classroom thật.
 
-
-## V12 — Cloudflare Realtime SFU `skyfirsthoc`
-
-Bản V12 giữ Durable Object/WebSocket cho presence, chat và điều khiển lớp; camera/micro/screen có thể chuyển sang Cloudflare Realtime SFU.
-
-Trong **Pages project `slc` > Settings > Variables and Secrets**, cấu hình:
-
-- `REALTIME_APP_ID`: App ID của Realtime App `skyfirsthoc`.
-- `REALTIME_APP_SECRET`: App Secret của Realtime App `skyfirsthoc` (**Secret**, không commit vào GitHub).
-
-`REALTIME_API_BASE=https://rtc.live.cloudflare.com/v1` và `REALTIME_APP_NAME=skyfirsthoc` đã có trong cấu hình. Khi thiếu App ID/Secret, phòng học tự dùng WebRTC mesh dự phòng; khi đủ hai giá trị, frontend chuyển media sang SFU.
-
-Migration mới: `0008_realtime_sfu_foundation.sql`. Migration này chỉ tạo bảng mới, không xóa dữ liệu cũ.
+Không chạy migration lại bằng cách xóa/đổi tên migration cũ. Lịch sử migration hiện tại được giữ để tương thích D1.

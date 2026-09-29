@@ -1,3 +1,4 @@
+const debugLog=(...args)=>{if(globalThis.__SLC_DEBUG__===true)console.debug(...args)};
 export class SkyMediaClient {
   constructor({ classId, accessToken, api, onRemoteTrack=()=>{}, onState=()=>{}, maxVideoSubscriptions=12 }) {
     this.classId=classId; this.accessToken=accessToken; this.api=api; this.onRemoteTrack=onRemoteTrack; this.onState=onState;
@@ -51,7 +52,7 @@ export class SkyMediaClient {
       if(!stream.getTracks().some(t=>t.id===track.id))stream.addTrack(track);
       const waiter=this.remoteWaitersByMid.get(mid)||([...this.remoteWaitersByMid.entries()].find(([candidateMid])=>this.remoteMetaByMid.get(candidateMid)?.sessionId===meta.sessionId&&this.remoteMetaByMid.get(candidateMid)?.trackName===meta.trackName)?.[1]);
       if(waiter)waiter.resolve(track);
-      console.log('[P0][ONTRACK]',{mid,trackId:track.id,kind:track.kind,readyState:track.readyState,muted:track.muted,sessionId:meta.sessionId||'UNKNOWN',trackName:meta.trackName||'UNKNOWN'});
+      debugLog('[P0][ONTRACK]',{mid,trackId:track.id,kind:track.kind,readyState:track.readyState,muted:track.muted,sessionId:meta.sessionId||'UNKNOWN',trackName:meta.trackName||'UNKNOWN'});
       this.onRemoteTrack(track,meta,stream);
     });
     return this;
@@ -74,7 +75,7 @@ export class SkyMediaClient {
       const mid=transceiver.mid;if(mid==null)throw new Error('MEDIA_PUBLISH_MID_MISSING');
       if(localOffer?.type!=='offer'||!localOffer.sdp)throw new Error('MEDIA_PUBLISH_OFFER_MISSING');
       const trackName=`${source}:${track.id||crypto.randomUUID()}`;
-      console.log('[P0.2][PUBLISH_OFFER]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState,transceivers:this.pc.getTransceivers().map(t=>({mid:t.mid,direction:t.direction,currentDirection:t.currentDirection,kind:t.sender?.track?.kind||t.receiver?.track?.kind||''}))});
+      debugLog('[P0.2][PUBLISH_OFFER]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState,transceivers:this.pc.getTransceivers().map(t=>({mid:t.mid,direction:t.direction,currentDirection:t.currentDirection,kind:t.sender?.track?.kind||t.receiver?.track?.kind||''}))});
       const result=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/tracks`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,operation:'publish',sessionDescription:{type:localOffer.type,sdp:localOffer.sdp},tracks:[{location:'local',mid,trackName,kind:track.kind,source}]})});
       if(result?.sessionDescription?.type!=='answer'||!result.sessionDescription?.sdp)throw new Error('MEDIA_PUBLISH_ANSWER_MISSING');
       try{
@@ -87,7 +88,7 @@ export class SkyMediaClient {
         try{transceiver.stop()}catch{}
         throw new Error('MEDIA_PUBLISH_NEGOTIATION_FAILED');
       }
-      console.log('[P0.2][PUBLISH_ANSWER_OK]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState});
+      debugLog('[P0.2][PUBLISH_ANSWER_OK]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState});
       await this._waitForConnected();
       const cloudTrack=result.tracks?.find(x=>x.trackName===trackName)||result.tracks?.[0];if(!cloudTrack?.trackName)throw new Error('MEDIA_PUBLISH_TRACK_MISSING');
       const meta={sessionId:this.sessionId,trackName:cloudTrack.trackName,mid:cloudTrack.mid??mid,kind:track.kind,source};this.published.set(source,{sender:transceiver.sender,transceiver,track,meta});return meta;
@@ -102,15 +103,15 @@ export class SkyMediaClient {
     this.subscribing.add(key);
     try{await this.init();await this._serial(async()=>{
       const result=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/tracks`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,operation:'subscribe',tracks:[{location:'remote',sessionId:meta.sessionId,trackName:meta.trackName}]})});
-      console.log('[P0][SUBSCRIBE_REQUEST]',{localSessionId:this.sessionId,remoteSessionId:meta.sessionId,trackName:meta.trackName,kind:meta.kind,source:meta.source});
+      debugLog('[P0][SUBSCRIBE_REQUEST]',{localSessionId:this.sessionId,remoteSessionId:meta.sessionId,trackName:meta.trackName,kind:meta.kind,source:meta.source});
       const pulled=result.tracks||[];if(!pulled.length)throw new Error('MEDIA_SUBSCRIBE_TRACK_MISSING');
-      console.log('[P0][SUBSCRIBE_RESPONSE]',{tracks:pulled,requiresImmediateRenegotiation:!!result.requiresImmediateRenegotiation,sdpType:result.sessionDescription?.type||''});
+      debugLog('[P0][SUBSCRIBE_RESPONSE]',{tracks:pulled,requiresImmediateRenegotiation:!!result.requiresImmediateRenegotiation,sdpType:result.sessionDescription?.type||''});
       // Populate all MID metadata synchronously before setRemoteDescription(). setRemoteDescription
       // is the point at which the browser may dispatch `track` events.
-      const waits=[];for(const t of pulled){if(t.mid==null)throw new Error('MEDIA_SUBSCRIBE_MID_MISSING');const mid=String(t.mid);const mapped={...meta,sessionId:t.sessionId||t.session_id||meta.sessionId,trackName:t.trackName||t.track_name||meta.trackName,kind:t.kind||meta.kind,source:t.source||meta.source,ownerName:t.ownerName||t.owner_name||meta.ownerName,mid};this.remoteMetaByMid.set(mid,mapped);waits.push(this._waitForRemoteMid(mid));console.log('[P0][MID_MAPPED]',{mid,sessionId:mapped.sessionId,trackName:mapped.trackName,kind:mapped.kind,source:mapped.source})}
+      const waits=[];for(const t of pulled){if(t.mid==null)throw new Error('MEDIA_SUBSCRIBE_MID_MISSING');const mid=String(t.mid);const mapped={...meta,sessionId:t.sessionId||t.session_id||meta.sessionId,trackName:t.trackName||t.track_name||meta.trackName,kind:t.kind||meta.kind,source:t.source||meta.source,ownerName:t.ownerName||t.owner_name||meta.ownerName,mid};this.remoteMetaByMid.set(mid,mapped);waits.push(this._waitForRemoteMid(mid));debugLog('[P0][MID_MAPPED]',{mid,sessionId:mapped.sessionId,trackName:mapped.trackName,kind:mapped.kind,source:mapped.source})}
       if(result.requiresImmediateRenegotiation||result.sessionDescription?.type==='offer'){
         if(result.sessionDescription?.type!=='offer'||!result.sessionDescription?.sdp)throw new Error('MEDIA_SUBSCRIBE_OFFER_MISSING');
-        await this.pc.setRemoteDescription(result.sessionDescription);console.log('[P0][REMOTE_DESCRIPTION]',{signalingState:this.pc.signalingState});const answer=await this.pc.createAnswer();await this.pc.setLocalDescription(answer);console.log('[P0][LOCAL_ANSWER]',{signalingState:this.pc.signalingState});
+        await this.pc.setRemoteDescription(result.sessionDescription);debugLog('[P0][REMOTE_DESCRIPTION]',{signalingState:this.pc.signalingState});const answer=await this.pc.createAnswer();await this.pc.setLocalDescription(answer);debugLog('[P0][LOCAL_ANSWER]',{signalingState:this.pc.signalingState});
         const rr=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`,{method:'PUT',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,sessionDescription:{type:'answer',sdp:answer.sdp}})});if(rr?.errorCode)throw new Error(rr.errorDescription||'MEDIA_RENEGOTIATE_FAILED');
       } else if(result.sessionDescription?.type==='answer'&&this.pc.signalingState==='have-local-offer') await this.pc.setRemoteDescription(result.sessionDescription);
       await this._waitForConnected();await Promise.all(waits);

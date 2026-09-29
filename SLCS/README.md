@@ -1,43 +1,46 @@
-## Sky First School VPLUS — VIP PRO
+# Trung tâm Học tập Số Sky First Network — V40 Production
 
-> **Current platform:** Sky First School VPLUS — Classroom UX + Confidence Camera + Teaching Layer + School Studio + Scale/Resilience.
+SLCS V40 là bản production hợp nhất của hệ thống học tập số Sky First Network.
 
-# Trung tâm Học tập Số Sky First Network — V11 Pages Fresh Rebuild
+Các khối chính hiện có:
+- Public website, SFN Account, yêu cầu/kích hoạt tài khoản.
+- Dashboard, lớp học, học liệu, lịch, thông báo, hỗ trợ.
+- Assignment, Gradebook, Progress, Attendance.
+- Live Classroom và Cloudflare Realtime SFU/fallback signaling.
+- Sky First Assessment Center cho thi, kiểm tra, đánh giá TNV, sát hạch, tuyển chọn, cuộc thi, khảo sát và loại tùy chỉnh.
+- Website Studio, Control Center, Organization, IAM, Automation, Analytics.
+- D1 cho dữ liệu, R2 cho file, Cloudflare Pages Functions cho API.
 
-V11 sử dụng installer D1 mới hoàn toàn theo cơ chế **one statement at a time** dành cho Cloudflare Pages Functions. Không còn dùng installer `DB.exec()` của V10.x.
-
-- Public website + SFN account
-- Account request / tracking / activation email
-- Classes, materials, assignments, exams, support
-- Admin Control Center
-- D1 metadata + R2 files
-- Giới hạn tối đa 10.000 tài khoản SFN
-- Cài schema trực tiếp từ website bằng `SETUP_TOKEN`
-
-## Deploy Pages
+## Cấu trúc archive
 
 ```text
-Framework preset: None
-Build command: npm install && npm run check
-Build output directory: public
-Root directory: SFN-SLC-VIPPRO
+SLCS/
+└── SLCS/
+    ├── public/
+    ├── src/
+    ├── functions/
+    ├── migrations/
+    ├── scripts/
+    ├── package.json
+    └── wrangler.json
 ```
 
-Sau deploy, kiểm tra `/api/health` và `/api/setup/installer-info` trước khi bấm cài dữ liệu.
+Khi deploy, dùng thư mục `SLCS/SLCS` làm project root.
 
-Xem `V11-FRESH-REBUILD.md` để biết cơ chế installer mới.
+## Kiểm tra production
 
+```bash
+npm install
+npm run validate:production
+```
 
+## Migration và deploy
 
-## V12 — Cloudflare Realtime SFU `skyfirsthoc`
+```bash
+npm run db:migrate
+npm run deploy
+```
 
-Bản V12 giữ Durable Object/WebSocket cho presence, chat và điều khiển lớp; camera/micro/screen có thể chuyển sang Cloudflare Realtime SFU.
+Trước deploy phải cấu hình secret Cloudflare phù hợp, tối thiểu `SETUP_TOKEN`; email cần `RESEND_API_KEY`; Cloudflare Realtime SFU cần `REALTIME_APP_ID` và `REALTIME_APP_SECRET`.
 
-Trong **Pages project `slc` > Settings > Variables and Secrets**, cấu hình:
-
-- `REALTIME_APP_ID`: App ID của Realtime App `skyfirsthoc`.
-- `REALTIME_APP_SECRET`: App Secret của Realtime App `skyfirsthoc` (**Secret**, không commit vào GitHub).
-
-`REALTIME_API_BASE=https://rtc.live.cloudflare.com/v1` và `REALTIME_APP_NAME=skyfirsthoc` đã có trong cấu hình. Khi thiếu App ID/Secret, phòng học tự dùng WebRTC mesh dự phòng; khi đủ hai giá trị, frontend chuyển media sang SFU.
-
-Migration mới: `0008_realtime_sfu_foundation.sql`. Migration này chỉ tạo bảng mới, không xóa dữ liệu cũ.
+Xem `PRODUCTION-RELEASE-V40.md` và `DEPLOY-CLOUDFLARE.md`.

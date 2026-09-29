@@ -5,7 +5,7 @@ import { ensureV13Schema, getClassLiveSettings, safeJson, logLiveEvent } from '.
 import { VPLUS, ensureVPlusSchema, recordPlatformEvent, hasPermission, requirePermission, safeUserMessage } from './vplus-platform.js';
 export { LiveRoom };
 
-const SECURITY_HEADERS = {'x-content-type-options':'nosniff','referrer-policy':'strict-origin-when-cross-origin','x-frame-options':'SAMEORIGIN','permissions-policy':'camera=(self), microphone=(self), display-capture=(self), geolocation=()','cross-origin-opener-policy':'same-origin-allow-popups'};
+const SECURITY_HEADERS = {'x-content-type-options':'nosniff','referrer-policy':'strict-origin-when-cross-origin','x-frame-options':'SAMEORIGIN','permissions-policy':'camera=(self), microphone=(self), display-capture=(self), geolocation=()','cross-origin-opener-policy':'same-origin-allow-popups','strict-transport-security':'max-age=31536000; includeSubDomains'};
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control':'no-store', ...SECURITY_HEADERS };
 const COOKIE = 'sfn_slc_session';
 const MAX_ACCOUNTS = 10000;
@@ -20,17 +20,27 @@ function cookieParse(h='') { return Object.fromEntries(h.split(';').map(v=>v.tri
 function sessionCookie(token, days=30) { return `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${days*86400}`; }
 function clearCookie() { return `${COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`; }
 function idCode(n) { return `SFN${String(n).padStart(5,'0')}`; }
-function slugCode(prefix='CLS') { return `${prefix}-${Math.random().toString(36).slice(2,6).toUpperCase()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`; }
+function slugCode(prefix='CLS') { const a=new Uint8Array(8); crypto.getRandomValues(a); const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const code=[...a].map(x=>alphabet[x%alphabet.length]).join(''); return `${prefix}-${code.slice(0,4)}-${code.slice(4,8)}`; }
 
-async function hashPassword(password, saltHex = null) {
-  const salt = saltHex ? Uint8Array.from(saltHex.match(/.{1,2}/g).map(x=>parseInt(x,16))) : crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name:'PBKDF2', salt, iterations:10000, hash:'SHA-256' }, key, 256);
-  const hash = [...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,'0')).join('');
-  const saltOut = [...salt].map(x=>x.toString(16).padStart(2,'0')).join('');
-  return { hash, salt: saltOut };
+const PASSWORD_KDF_VERSION='v2';
+const PASSWORD_KDF_ITERATIONS=210000;
+async function hashPassword(password, saltSpec = null) {
+  let iterations=PASSWORD_KDF_ITERATIONS, saltHex='';
+  if(saltSpec){
+    const raw=String(saltSpec);
+    if(raw.startsWith(`${PASSWORD_KDF_VERSION}$`)){const parts=raw.split('$');iterations=Math.max(10000,Math.min(600000,Number(parts[1])||PASSWORD_KDF_ITERATIONS));saltHex=parts[2]||'';}
+    else { iterations=10000; saltHex=raw; } // legacy hashes remain valid and are upgraded after login
+  }
+  const pairs=saltHex.match(/.{1,2}/g);
+  const salt=pairs&&pairs.length?Uint8Array.from(pairs.map(x=>parseInt(x,16))):crypto.getRandomValues(new Uint8Array(16));
+  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);
+  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations,hash:'SHA-256'},key,256);
+  const hash=[...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,'0')).join('');
+  const saltOut=[...salt].map(x=>x.toString(16).padStart(2,'0')).join('');
+  return {hash,salt:saltSpec?String(saltSpec):`${PASSWORD_KDF_VERSION}$${PASSWORD_KDF_ITERATIONS}$${saltOut}`};
 }
-async function verifyPassword(password, salt, expected) { return (await hashPassword(password, salt)).hash === expected; }
+async function verifyPassword(password,salt,expected){return (await hashPassword(password,salt)).hash===expected;}
+function passwordNeedsUpgrade(salt=''){return !String(salt).startsWith(`${PASSWORD_KDF_VERSION}$`);}
 
 async function getSession(request, env) {
   const token = cookieParse(request.headers.get('cookie') || '')[COOKIE];
@@ -129,25 +139,27 @@ function viRequestStatus(status='pending'){
 }
 function emailShell({title,preheader='',body,env}){
   const support=env.SUPPORT_EMAIL||'support@skyfirst.io.vn';
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEsc(title)}</title></head><body style="margin:0;background:#f6eff6;font-family:Arial,Helvetica,sans-serif;color:#2a1d2b"><div style="display:none;max-height:0;overflow:hidden;opacity:0">${htmlEsc(preheader)}</div><div style="max-width:720px;margin:28px auto;padding:0 14px"><div style="background:#fff;border-radius:28px;overflow:hidden;box-shadow:0 18px 55px rgba(53,20,52,.14)"><div style="padding:34px;background:linear-gradient(135deg,#351544 0%,#7f2457 50%,#ff7b57 100%);color:#fff"><div style="font-size:12px;letter-spacing:1.2px;font-weight:700;text-transform:uppercase;opacity:.86">Sky First Network Digital Learning Center</div><div style="font-size:16px;font-weight:800;margin-top:7px">Trung tâm Học tập Số Sky First Network</div><h1 style="margin:18px 0 8px;font-size:29px;line-height:1.18">${htmlEsc(title)}</h1></div><div style="padding:30px 34px">${body}</div><div style="padding:23px 34px 28px;background:#2a162d;color:#ddd0df;font-size:12px;line-height:1.7"><b>Trung tâm Học tập Số Sky First Network</b><br>Hỗ trợ: <a href="mailto:${support}" style="color:#ffd3df;text-decoration:none">${support}</a><br>Email hệ thống: <a href="mailto:slc@skyfirst.io.vn" style="color:#ffd3df;text-decoration:none">slc@skyfirst.io.vn</a><br><br><div style="padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.10);color:#f2e8f3"><b>Email này được gửi tự động từ Trung tâm Học tập Số Sky First Network.</b><br>Vui lòng không phản hồi trực tiếp email này. Nếu bạn cần hỗ trợ, vui lòng liên hệ <b>${support}</b>.</div><br>Một sản phẩm thuộc hệ sinh thái Sky First Network.<br>© 2026 Sky First Network. Mọi quyền được bảo lưu.</div></div></div></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEsc(title)}</title></head><body style="margin:0;background:#eef8ff;font-family:Arial,Helvetica,sans-serif;color:#102436"><div style="display:none;max-height:0;overflow:hidden;opacity:0">${htmlEsc(preheader)}</div><div style="max-width:720px;margin:28px auto;padding:0 14px"><div style="background:#fff;border-radius:28px;overflow:hidden;box-shadow:0 18px 55px rgba(15,95,154,.14)"><div style="padding:34px;background:linear-gradient(135deg,#0b5f9f 0%,#1687dc 50%,#67b8ee 100%);color:#fff"><div style="font-size:12px;letter-spacing:1.2px;font-weight:700;text-transform:uppercase;opacity:.86">Sky First Network Digital Learning Center</div><div style="font-size:16px;font-weight:800;margin-top:7px">Trung tâm Học tập Số Sky First Network</div><h1 style="margin:18px 0 8px;font-size:29px;line-height:1.18">${htmlEsc(title)}</h1></div><div style="padding:30px 34px">${body}</div><div style="padding:23px 34px 28px;background:#0b3553;color:#dbeeff;font-size:12px;line-height:1.7"><b>Trung tâm Học tập Số Sky First Network</b><br>Hỗ trợ: <a href="mailto:${support}" style="color:#bfe4ff;text-decoration:none">${support}</a><br>Email hệ thống: <a href="mailto:slc@skyfirst.io.vn" style="color:#bfe4ff;text-decoration:none">slc@skyfirst.io.vn</a><br><br><div style="padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.10);color:#edf8ff"><b>Email này được gửi tự động từ Trung tâm Học tập Số Sky First Network.</b><br>Vui lòng không phản hồi trực tiếp email này. Nếu bạn cần hỗ trợ, vui lòng liên hệ <b>${support}</b>.</div><br>Một sản phẩm thuộc hệ sinh thái Sky First Network.<br>© 2026 Sky First Network. Mọi quyền được bảo lưu.</div></div></div></body></html>`;
 }
 function requestReceivedEmail(env,{fullName,requestCode,email,phone,data}){
   const lookup=`${env.APP_URL||'https://slc.skyfirst.io.vn'}/#lookup`;
-  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>, yêu cầu cấp tài khoản SFN của bạn đã được hệ thống ghi nhận.</p><div style="margin:22px 0;padding:22px;border-radius:20px;background:linear-gradient(135deg,#fff3f0,#f8edff);border:1px solid #ecd8e7;text-align:center"><div style="font-size:12px;color:#796879;font-weight:700;margin-bottom:8px">MÃ TRA CỨU YÊU CẦU</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:800;letter-spacing:1px;color:#7f2457">${htmlEsc(requestCode)}</div><div style="display:inline-block;margin-top:10px;background:#ffe5d8;color:#8a3b28;padding:7px 11px;border-radius:999px;font-weight:700;font-size:12px">ĐÃ TIẾP NHẬN</div></div><table role="presentation" style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #eee1eb;border-radius:18px;overflow:hidden"><tr><td style="padding:12px 15px;font-weight:700;color:#5b4759">Email đăng ký</td><td style="padding:12px 15px">${htmlEsc(email)}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#5b4759;border-top:1px solid #f1e7ef">Số điện thoại</td><td style="padding:12px 15px;border-top:1px solid #f1e7ef">${htmlEsc(phone)}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#5b4759;border-top:1px solid #f1e7ef">Đơn vị học tập</td><td style="padding:12px 15px;border-top:1px solid #f1e7ef">${htmlEsc(data.education_unit||'Chưa cung cấp')}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#5b4759;border-top:1px solid #f1e7ef">Lớp / Khóa</td><td style="padding:12px 15px;border-top:1px solid #f1e7ef">${htmlEsc(data.class_name||'Chưa cung cấp')}</td></tr></table><div style="text-align:center;margin:28px 0"><a href="${lookup}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">TRA CỨU YÊU CẦU</a></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px"><b>Lưu ý:</b> Email này xác nhận hệ thống đã tiếp nhận hồ sơ, chưa đồng nghĩa với việc tài khoản đã được cấp. Các cập nhật quan trọng sẽ được gửi đến email đăng ký.</div>`;
+  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>, yêu cầu cấp tài khoản SFN của bạn đã được hệ thống ghi nhận.</p><div style="margin:22px 0;padding:22px;border-radius:20px;background:linear-gradient(135deg,#f4fbff,#edf8ff);border:1px solid #cfe6f5;text-align:center"><div style="font-size:12px;color:#52677a;font-weight:700;margin-bottom:8px">MÃ TRA CỨU YÊU CẦU</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:800;letter-spacing:1px;color:#1687dc">${htmlEsc(requestCode)}</div><div style="display:inline-block;margin-top:10px;background:#dff3ff;color:#0e6fb9;padding:7px 11px;border-radius:999px;font-weight:700;font-size:12px">ĐÃ TIẾP NHẬN</div></div><table role="presentation" style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #d6e8f4;border-radius:18px;overflow:hidden"><tr><td style="padding:12px 15px;font-weight:700;color:#40586d">Email đăng ký</td><td style="padding:12px 15px">${htmlEsc(email)}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#40586d;border-top:1px solid #e5f1f8">Số điện thoại</td><td style="padding:12px 15px;border-top:1px solid #e5f1f8">${htmlEsc(phone)}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#40586d;border-top:1px solid #e5f1f8">Đơn vị học tập</td><td style="padding:12px 15px;border-top:1px solid #e5f1f8">${htmlEsc(data.education_unit||'Chưa cung cấp')}</td></tr><tr><td style="padding:12px 15px;font-weight:700;color:#40586d;border-top:1px solid #e5f1f8">Lớp / Khóa</td><td style="padding:12px 15px;border-top:1px solid #e5f1f8">${htmlEsc(data.class_name||'Chưa cung cấp')}</td></tr></table><div style="text-align:center;margin:28px 0"><a href="${lookup}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#1687dc,#63b6ed);color:#ffffff;text-decoration:none;font-weight:800">TRA CỨU YÊU CẦU</a></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px"><b>Lưu ý:</b> Email này xác nhận hệ thống đã tiếp nhận hồ sơ, chưa đồng nghĩa với việc tài khoản đã được cấp. Các cập nhật quan trọng sẽ được gửi đến email đăng ký.</div>`;
   return emailShell({title:'Xác nhận tiếp nhận yêu cầu cấp tài khoản',preheader:`Mã tra cứu: ${requestCode}`,body,env});
 }
 function activationEmail(env,{fullName,sfnId,activationUrl}){
-  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>, yêu cầu cấp tài khoản của bạn đã được phê duyệt.</p><div style="padding:20px;border-radius:18px;background:#fff4f2;border:1px solid #eddce3"><div style="font-size:12px;color:#7a6674;font-weight:700">SFN ID CỦA BẠN</div><div style="font-family:Consolas,monospace;font-size:28px;font-weight:900;color:#7f2457;margin-top:6px">${htmlEsc(sfnId)}</div></div><p style="line-height:1.7">Để hoàn tất, hãy tạo mật khẩu cho tài khoản bằng nút bên dưới. Liên kết kích hoạt có thời hạn và chỉ sử dụng một lần.</p><div style="text-align:center;margin:28px 0"><a href="${activationUrl}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">KÍCH HOẠT TÀI KHOẢN</a></div>`;
+  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>, yêu cầu cấp tài khoản của bạn đã được phê duyệt.</p><div style="padding:20px;border-radius:18px;background:#f4fbff;border:1px solid #d6e8f4"><div style="font-size:12px;color:#52677a;font-weight:700">SFN ID CỦA BẠN</div><div style="font-family:Consolas,monospace;font-size:28px;font-weight:900;color:#1687dc;margin-top:6px">${htmlEsc(sfnId)}</div></div><p style="line-height:1.7">Để hoàn tất, hãy tạo mật khẩu cho tài khoản bằng nút bên dưới. Liên kết kích hoạt có thời hạn và chỉ sử dụng một lần.</p><div style="text-align:center;margin:28px 0"><a href="${activationUrl}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#1687dc,#63b6ed);color:#ffffff;text-decoration:none;font-weight:800">KÍCH HOẠT TÀI KHOẢN</a></div>`;
   return emailShell({title:'Tài khoản SFN của bạn đã được phê duyệt',preheader:`SFN ID: ${sfnId}`,body,env});
 }
 function temporaryPassword(){
-  const a=new Uint8Array(3); crypto.getRandomValues(a);
-  return 'SFN@TEENTNVMAX'+[...a].map(x=>String((x%9)+1)).join('');
+  const a=new Uint8Array(14); crypto.getRandomValues(a);
+  const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  const body=[...a].map(x=>alphabet[x%alphabet.length]).join('');
+  return `SFN@${body}!`;
 }
 function credentialsEmail(env,{fullName,sfnId,password,reset=false}){
   const loginUrl=`${env.APP_URL||'https://slc.skyfirst.io.vn'}/#login`;
   const title=reset?'Mật khẩu tạm mới của tài khoản SFN':'Thông tin kích hoạt tài khoản SFN';
-  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>,</p><p style="line-height:1.7">${reset?'Quản trị viên đã cấp lại mật khẩu cho tài khoản của bạn.':'Tài khoản của bạn đã được quản trị viên kích hoạt.'}</p><div style="padding:20px;border-radius:18px;background:#fff4f2;border:1px solid #eddce3"><div style="font-size:12px;color:#7a6674;font-weight:700">SFN ID / TÊN ĐĂNG NHẬP</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:900;color:#7f2457;margin:6px 0 18px">${htmlEsc(sfnId)}</div><div style="font-size:12px;color:#7a6674;font-weight:700">MẬT KHẨU TẠM</div><div style="font-family:Consolas,monospace;font-size:21px;font-weight:900;color:#7f2457;margin-top:6px">${htmlEsc(password)}</div></div><div style="text-align:center;margin:28px 0"><a href="${loginUrl}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#ff658d,#ff9b63);color:#24141d;text-decoration:none;font-weight:800">ĐĂNG NHẬP SLC</a></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px"><b>Bảo mật:</b> Đây là mật khẩu tạm. Hãy đổi mật khẩu sau khi đăng nhập và không chia sẻ thông tin đăng nhập cho người khác.</div>`;
+  const body=`<p style="font-size:17px;line-height:1.7;margin-top:0">Xin chào <b>${htmlEsc(fullName)}</b>,</p><p style="line-height:1.7">${reset?'Quản trị viên đã cấp lại mật khẩu cho tài khoản của bạn.':'Tài khoản của bạn đã được quản trị viên kích hoạt.'}</p><div style="padding:20px;border-radius:18px;background:#f4fbff;border:1px solid #d6e8f4"><div style="font-size:12px;color:#52677a;font-weight:700">SFN ID / TÊN ĐĂNG NHẬP</div><div style="font-family:Consolas,monospace;font-size:25px;font-weight:900;color:#1687dc;margin:6px 0 18px">${htmlEsc(sfnId)}</div><div style="font-size:12px;color:#52677a;font-weight:700">MẬT KHẨU TẠM</div><div style="font-family:Consolas,monospace;font-size:21px;font-weight:900;color:#1687dc;margin-top:6px">${htmlEsc(password)}</div></div><div style="text-align:center;margin:28px 0"><a href="${loginUrl}" style="display:inline-block;padding:14px 22px;border-radius:14px;background:linear-gradient(90deg,#1687dc,#63b6ed);color:#ffffff;text-decoration:none;font-weight:800">ĐĂNG NHẬP SLC</a></div><div style="padding:16px 18px;border-radius:16px;background:#fff8ec;color:#6f5637;line-height:1.55;font-size:13px"><b>Bảo mật:</b> Đây là mật khẩu tạm. Hãy đổi mật khẩu sau khi đăng nhập và không chia sẻ thông tin đăng nhập cho người khác.</div>`;
   return emailShell({title,preheader:`SFN ID: ${sfnId}`,body,env});
 }
 
@@ -258,6 +270,16 @@ async function adminLog(env,userId,action,detail={}){
 async function getSettings(env){
   const rows=await env.DB.prepare(`SELECT key,value FROM system_settings ORDER BY key`).all();
   return Object.fromEntries((rows.results||[]).map(x=>[x.key,x.value]));
+}
+
+function trustedRequestOrigin(request,env){
+  if(!['POST','PUT','PATCH','DELETE'].includes(request.method))return true;
+  const origin=request.headers.get('origin');
+  if(!origin)return true; // non-browser clients/Cloudflare internal calls
+  const allowed=new Set();
+  try{allowed.add(new URL(request.url).origin)}catch{}
+  try{if(env.APP_URL)allowed.add(new URL(env.APP_URL).origin)}catch{}
+  return allowed.has(origin);
 }
 
 async function routeApi(request, env, ctx, url) {
@@ -401,6 +423,7 @@ async function routeApi(request, env, ctx, url) {
     const good=!!u && u.status==='active' && !!u.password_salt && !!u.password_hash && await verifyPassword(pw,u.password_salt,u.password_hash);
     if(!good){const cfg=await getSettings(env).catch(()=>({}));await recordLoginFailure(env,throttleKey,Math.max(5,Math.min(30,Number(cfg.login_rate_limit||10))));return bad('Thông tin đăng nhập không đúng.',401);}
     await clearLoginThrottle(env,throttleKey);
+    if(passwordNeedsUpgrade(u.password_salt)){try{const upgraded=await hashPassword(pw);await env.DB.prepare(`UPDATE users SET password_hash=?,password_salt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(upgraded.hash,upgraded.salt,u.id).run()}catch{}}
     const token=randomToken(32); const cfg=await getSettings(env).catch(()=>({})); const days=Math.max(1,Math.min(90,Number(cfg.default_session_days||env.SESSION_DAYS||30)));
     const exp=new Date(Date.now()+days*86400000).toISOString(); const ipHash=ip?await sha256Text(ip):'';
     await env.DB.prepare(`INSERT INTO sessions(token,user_id,ip_hash,user_agent,expires_at,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(token,u.id,ipHash,(request.headers.get('user-agent')||'').slice(0,500),exp).run();
@@ -552,7 +575,7 @@ async function routeApi(request, env, ctx, url) {
   }
   if(assignmentsMatch && method==='POST'){
     const u=await requireUser(request,env); const id=assignmentsMatch[1]; const m=await env.DB.prepare(`SELECT role FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(id,u.user_id).first(); if(!m||!['teacher','assistant'].includes(m.role))return bad('Không có quyền.',403);
-    const b=await request.json(); if(!str(b.title))return bad('Tên bài tập không được để trống.'); const aid=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO assignments(id,class_id,type,title,instructions,due_at,points,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(aid,id,b.type==='tnv_task'?'tnv_task':'assignment',str(b.title),str(b.instructions),b.due_at||null,Number(b.points||10),u.user_id).run(); return ok({id:aid});
+    const b=await request.json(); if(!str(b.title))return bad('Tên bài tập không được để trống.'); const aid=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO assignments(id,class_id,type,title,instructions,due_at,points,created_by,created_at,category,allow_late,max_resubmissions,published) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?,?,?)`).bind(aid,id,b.type==='tnv_task'?'tnv_task':'assignment',str(b.title),str(b.instructions),b.due_at||null,Math.max(0,Number(b.points||10)),u.user_id,str(b.category).slice(0,80)||'assignment',b.allow_late===false?0:1,Math.max(0,Math.min(20,Number(b.max_resubmissions??1))),b.published===false?0:1).run(); return ok({id:aid});
   }
 
   const submitMatch=path.match(/^\/api\/assignments\/([^/]+)\/submit$/);
@@ -562,20 +585,53 @@ async function routeApi(request, env, ctx, url) {
     await env.DB.prepare(`INSERT INTO submissions(id,assignment_id,user_id,text_answer,file_id,status,submitted_at,updated_at) VALUES(?,?,?,?,?,'submitted',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(assignment_id,user_id) DO UPDATE SET text_answer=excluded.text_answer,file_id=COALESCE(excluded.file_id,submissions.file_id),status='submitted',submitted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),aid,u.user_id,str(form.get('text')),fileId).run(); return ok();
   }
 
+  // V36 Learning Core — Gradebook, progress and attendance.
+  const learningSummary=path.match(/^\/api\/classes\/([^/]+)\/learning-summary$/);
+  if(learningSummary && method==='GET'){
+    const u=await requireUser(request,env), classId=learningSummary[1]; const membership=await requireClassMember(env,classId,u.user_id);
+    const members=await env.DB.prepare(`SELECT cm.user_id,cm.role,u.sfn_id,u.full_name FROM class_members cm JOIN users u ON u.id=cm.user_id WHERE cm.class_id=? AND cm.status='active' ORDER BY u.full_name`).bind(classId).all();
+    const assignments=await env.DB.prepare(`SELECT id,title,type,category,points,due_at FROM assignments WHERE class_id=? AND published=1 ORDER BY created_at`).bind(classId).all();
+    const submissions=await env.DB.prepare(`SELECT s.assignment_id,s.user_id,s.status,s.score,s.submitted_at FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE a.class_id=?`).bind(classId).all();
+    const exams=await env.DB.prepare(`SELECT id,title,assessment_type FROM exams WHERE class_id=? AND status='published' ORDER BY created_at`).bind(classId).all();
+    const attempts=await env.DB.prepare(`SELECT a.exam_id,a.user_id,a.status,a.score,a.max_score FROM exam_attempts a JOIN exams e ON e.id=a.exam_id WHERE e.class_id=? AND a.status='submitted'`).bind(classId).all();
+    const categories=await env.DB.prepare(`SELECT * FROM gradebook_categories WHERE class_id=? ORDER BY sort_order,name`).bind(classId).all();
+    const att=await env.DB.prepare(`SELECT r.user_id,r.status FROM class_attendance_records r JOIN class_attendance_sessions s ON s.id=r.session_id WHERE s.class_id=?`).bind(classId).all();
+    const studentRows=(members.results||[]).filter(x=>x.role==='student').map(m=>{const ss=(submissions.results||[]).filter(x=>x.user_id===m.user_id);const aa=(attempts.results||[]).filter(x=>x.user_id===m.user_id);const ar=(att.results||[]).filter(x=>x.user_id===m.user_id);const graded=ss.filter(x=>x.score!=null);const possible=graded.reduce((n,x)=>n+Number((assignments.results||[]).find(a=>a.id===x.assignment_id)?.points||0),0);const earned=graded.reduce((n,x)=>n+Number(x.score||0),0);const examPct=aa.filter(x=>Number(x.max_score)>0).map(x=>100*Number(x.score||0)/Number(x.max_score));return {...m,assignments_submitted:ss.length,assignments_total:(assignments.results||[]).length,assignment_percent:possible?Math.round(earned/possible*100):null,assessment_percent:examPct.length?Math.round(examPct.reduce((a,b)=>a+b,0)/examPct.length):null,attendance_percent:ar.length?Math.round(ar.filter(x=>['present','late'].includes(x.status)).length/ar.length*100):null}});
+    return ok({role:membership.role,assignments:assignments.results,exams:exams.results,categories:categories.results,students:studentRows});
+  }
+  const gradeCategories=path.match(/^\/api\/classes\/([^/]+)\/gradebook\/categories$/);
+  if(gradeCategories && method==='POST'){
+    const u=await requireUser(request,env), classId=gradeCategories[1]; await requireClassMember(env,classId,u.user_id,['teacher','assistant']); const b=await request.json();const name=str(b.name).slice(0,80);if(!name)return bad('Tên nhóm điểm không được để trống.');const weight=Math.max(0,Math.min(100,Number(b.weight||0)));await env.DB.prepare(`INSERT INTO gradebook_categories(id,class_id,name,weight,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(class_id,name) DO UPDATE SET weight=excluded.weight`).bind(crypto.randomUUID(),classId,name,weight,Number(b.sort_order||0)).run();return ok();
+  }
+  const attendance=path.match(/^\/api\/classes\/([^/]+)\/attendance$/);
+  if(attendance && method==='GET'){
+    const u=await requireUser(request,env), classId=attendance[1]; await requireClassMember(env,classId,u.user_id);const sessions=await env.DB.prepare(`SELECT s.*,(SELECT COUNT(*) FROM class_attendance_records r WHERE r.session_id=s.id) marked_count FROM class_attendance_sessions s WHERE s.class_id=? ORDER BY s.starts_at DESC LIMIT 100`).bind(classId).all();return ok({sessions:sessions.results});
+  }
+  if(attendance && method==='POST'){
+    const u=await requireUser(request,env), classId=attendance[1];await requireClassMember(env,classId,u.user_id,['teacher','assistant']);const b=await request.json();const id=crypto.randomUUID();await env.DB.prepare(`INSERT INTO class_attendance_sessions(id,class_id,title,starts_at,ends_at,created_by) VALUES(?,?,?,?,?,?)`).bind(id,classId,str(b.title).slice(0,120)||'Buổi học',str(b.starts_at)||nowIso(),str(b.ends_at)||null,u.user_id).run();const members=await env.DB.prepare(`SELECT user_id FROM class_members WHERE class_id=? AND role='student' AND status='active'`).bind(classId).all();for(const m of members.results||[])await env.DB.prepare(`INSERT OR IGNORE INTO class_attendance_records(session_id,user_id,status,marked_by) VALUES(?,?,'present',?)`).bind(id,m.user_id,u.user_id).run();return ok({id});
+  }
+  const attendanceSession=path.match(/^\/api\/attendance\/([^/]+)$/);
+  if(attendanceSession && method==='GET'){
+    const u=await requireUser(request,env);const sid=attendanceSession[1];const sess=await env.DB.prepare(`SELECT * FROM class_attendance_sessions WHERE id=?`).bind(sid).first();if(!sess)return bad('Không tìm thấy buổi điểm danh.',404);await requireClassMember(env,sess.class_id,u.user_id);const rows=await env.DB.prepare(`SELECT r.*,u.sfn_id,u.full_name FROM class_attendance_records r JOIN users u ON u.id=r.user_id WHERE r.session_id=? ORDER BY u.full_name`).bind(sid).all();return ok({session:sess,records:rows.results});
+  }
+  if(attendanceSession && method==='PATCH'){
+    const u=await requireUser(request,env);const sid=attendanceSession[1];const sess=await env.DB.prepare(`SELECT class_id FROM class_attendance_sessions WHERE id=?`).bind(sid).first();if(!sess)return bad('Không tìm thấy buổi điểm danh.',404);await requireClassMember(env,sess.class_id,u.user_id,['teacher','assistant']);const b=await request.json();const status=['present','late','absent','excused'].includes(str(b.status))?str(b.status):'present';await env.DB.prepare(`UPDATE class_attendance_records SET status=?,note=?,marked_by=?,updated_at=CURRENT_TIMESTAMP WHERE session_id=? AND user_id=?`).bind(status,str(b.note).slice(0,300),u.user_id,sid,str(b.user_id)).run();return ok();
+  }
+
   const examsMatch=path.match(/^\/api\/classes\/([^/]+)\/exams$/);
   if(examsMatch && method==='GET'){
-    const u=await requireUser(request,env); const id=examsMatch[1]; await requireClassMember(env,id,u.user_id); const rows=await env.DB.prepare(`SELECT e.id,e.class_id,e.title,e.instructions,e.duration_minutes,e.strict_mode,e.status,e.created_at,e.opens_at,e.closes_at,e.max_attempts,e.show_score,e.fullscreen_required,e.terminate_on_exit,(SELECT status FROM exam_attempts a WHERE a.exam_id=e.id AND a.user_id=? ORDER BY a.started_at DESC LIMIT 1) attempt_status FROM exams e WHERE e.class_id=? ORDER BY e.created_at DESC`).bind(u.user_id,id).all(); return ok({exams:rows.results});
+    const u=await requireUser(request,env); const id=examsMatch[1]; await requireClassMember(env,id,u.user_id); const rows=await env.DB.prepare(`SELECT e.id,e.class_id,e.title,e.instructions,e.duration_minutes,e.strict_mode,e.status,e.created_at,e.opens_at,e.closes_at,e.max_attempts,e.show_score,e.fullscreen_required,e.terminate_on_exit,e.assessment_type,e.assessment_label,e.center_label,(SELECT status FROM exam_attempts a WHERE a.exam_id=e.id AND a.user_id=? ORDER BY a.started_at DESC LIMIT 1) attempt_status FROM exams e WHERE e.class_id=? ORDER BY e.created_at DESC`).bind(u.user_id,id).all(); return ok({exams:rows.results});
   }
   if(examsMatch && method==='POST'){
     const u=await requireUser(request,env); const id=examsMatch[1]; const m=await env.DB.prepare(`SELECT role FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(id,u.user_id).first(); if(!m||!['teacher','assistant'].includes(m.role))return bad('Không có quyền.',403);
-    const b=await request.json(); const title=str(b.title), questions=Array.isArray(b.questions)?b.questions.slice(0,300):[]; if(!title)return bad('Tên bài kiểm tra không được để trống.'); if(!questions.length)return bad('Bài kiểm tra cần ít nhất một câu hỏi.'); const clean=questions.map(q=>({id:str(q.id)||crypto.randomUUID(),type:['mcq','truefalse','short'].includes(q.type)?q.type:'mcq',question:str(q.question).slice(0,3000),options:Array.isArray(q.options)?q.options.slice(0,8).map(x=>str(x).slice(0,500)):[],answer:str(q.answer).slice(0,1000),points:Math.max(.25,Math.min(100,Number(q.points||1)))})).filter(q=>q.question); if(!clean.length)return bad('Không có câu hỏi hợp lệ.'); const eid=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO exams(id,class_id,title,instructions,duration_minutes,strict_mode,question_json,status,created_by,created_at,opens_at,closes_at,max_attempts,show_score,fullscreen_required,terminate_on_exit) VALUES(?,?,?,?,?,?,?,'published',?,CURRENT_TIMESTAMP,?,?,?,?,?,?)`).bind(eid,id,title,str(b.instructions).slice(0,5000),Math.max(1,Math.min(720,Number(b.duration_minutes||30))),b.strict_mode?1:0,JSON.stringify(clean),u.user_id,str(b.opens_at)||null,str(b.closes_at)||null,Math.max(1,Math.min(10,Number(b.max_attempts||1))),b.show_score===false?0:1,b.fullscreen_required||b.strict_mode?1:0,b.terminate_on_exit||b.strict_mode?1:0).run(); return ok({id:eid});
+    const b=await request.json(); const title=str(b.title), questions=Array.isArray(b.questions)?b.questions.slice(0,300):[]; if(!title)return bad('Tên bài kiểm tra không được để trống.'); if(!questions.length)return bad('Bài kiểm tra cần ít nhất một câu hỏi.'); const clean=questions.map(q=>({id:str(q.id)||crypto.randomUUID(),type:['mcq','truefalse','short','essay','fill','multi','matching','ordering'].includes(q.type)?q.type:'mcq',question:str(q.question).slice(0,3000),options:Array.isArray(q.options)?q.options.slice(0,8).map(x=>str(x).slice(0,500)):[],answer:str(q.answer).slice(0,1000),points:Math.max(.25,Math.min(100,Number(q.points||1)))})).filter(q=>q.question); if(!clean.length)return bad('Không có câu hỏi hợp lệ.'); const eid=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO exams(id,class_id,title,instructions,duration_minutes,strict_mode,question_json,status,created_by,created_at,opens_at,closes_at,max_attempts,show_score,fullscreen_required,terminate_on_exit,assessment_type,assessment_label,center_label) VALUES(?,?,?,?,?,?,?,'published',?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?)`).bind(eid,id,title,str(b.instructions).slice(0,5000),Math.max(1,Math.min(720,Number(b.duration_minutes||30))),b.strict_mode?1:0,JSON.stringify(clean),u.user_id,str(b.opens_at)||null,str(b.closes_at)||null,Math.max(1,Math.min(10,Number(b.max_attempts||1))),b.show_score===false?0:1,b.fullscreen_required||b.strict_mode?1:0,b.terminate_on_exit||b.strict_mode?1:0,['official_exam','class_test','volunteer_evaluation','selection','competition','survey','custom'].includes(str(b.assessment_type))?str(b.assessment_type):'class_test',str(b.assessment_label).slice(0,120)||({official_exam:'Kỳ thi chính thức',class_test:'Kiểm tra lớp học',volunteer_evaluation:'Đánh giá TNV',selection:'Tuyển chọn / Sát hạch',competition:'Cuộc thi kiến thức',survey:'Khảo sát',custom:'Đánh giá tùy chỉnh'}[str(b.assessment_type)]||'Kiểm tra lớp học'),str(b.center_label).slice(0,120)||'Trung tâm Đánh giá').run(); return ok({id:eid});
   }
 
   const startExam=path.match(/^\/api\/exams\/([^/]+)\/start$/);
   if(startExam && method==='POST'){
     const u=await requireUser(request,env); const eid=startExam[1]; const e=await env.DB.prepare(`SELECT * FROM exams WHERE id=? AND status='published'`).bind(eid).first(); if(!e)return bad('Không tìm thấy bài kiểm tra.'); await requireClassMember(env,e.class_id,u.user_id); const now=Date.now(); if(e.opens_at&&now<new Date(e.opens_at).getTime())return bad('Kỳ thi chưa mở.',409); if(e.closes_at&&now>new Date(e.closes_at).getTime())return bad('Kỳ thi đã đóng.',409);
     const existing=await activeExam(u.user_id,env); if(existing)return bad('Bạn đang có một phiên kiểm tra khác đang hoạt động.',409,existing); const cnt=await env.DB.prepare(`SELECT COUNT(*) n FROM exam_attempts WHERE exam_id=? AND user_id=? AND status IN ('submitted','expired','terminated')`).bind(eid,u.user_id).first(); if(Number(cnt?.n||0)>=Number(e.max_attempts||1))return bad('Bạn đã sử dụng hết số lượt thi.',409);
-    const id=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO exam_attempts(id,exam_id,user_id,status,started_at,answers_json,event_log_json) VALUES(?,?,?,'in_progress',CURRENT_TIMESTAMP,'{}','[]')`).bind(id,eid,u.user_id).run(); return ok({attempt_id:id,exam:{id:e.id,title:e.title,instructions:e.instructions,duration_minutes:e.duration_minutes,strict_mode:e.strict_mode,fullscreen_required:e.fullscreen_required,terminate_on_exit:e.terminate_on_exit,show_score:e.show_score,questions:JSON.parse(e.question_json||'[]')}});
+    const id=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO exam_attempts(id,exam_id,user_id,status,started_at,answers_json,event_log_json) VALUES(?,?,?,'in_progress',CURRENT_TIMESTAMP,'{}','[]')`).bind(id,eid,u.user_id).run(); return ok({attempt_id:id,exam:{id:e.id,title:e.title,instructions:e.instructions,duration_minutes:e.duration_minutes,strict_mode:e.strict_mode,fullscreen_required:e.fullscreen_required,terminate_on_exit:e.terminate_on_exit,show_score:e.show_score,assessment_type:e.assessment_type,assessment_label:e.assessment_label,center_label:e.center_label,questions:JSON.parse(e.question_json||'[]')}});
   }
 
   const saveExam=path.match(/^\/api\/exam-attempts\/([^/]+)\/save$/);
@@ -590,12 +646,12 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env); const b=await request.json(); const a=await env.DB.prepare(`SELECT a.*,e.question_json,e.duration_minutes,e.show_score FROM exam_attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=? AND a.user_id=? AND a.status='in_progress'`).bind(submitExam[1],u.user_id).first(); if(!a)return bad('Phiên thi không còn hoạt động.',409);
     const deadline=new Date(a.started_at).getTime()+Number(a.duration_minutes||30)*60000; if(Date.now()>deadline+120000){await env.DB.prepare(`UPDATE exam_attempts SET status='expired',submitted_at=COALESCE(submitted_at,CURRENT_TIMESTAMP),last_saved_at=COALESCE(last_saved_at,CURRENT_TIMESTAMP) WHERE id=? AND status='in_progress'`).bind(a.id).run();return bad('Phiên thi đã quá thời gian nộp bài.',409,{status:'expired'});}
     const qs=JSON.parse(a.question_json||'[]'), ans=b.answers||{}; let score=0,max=0;
-    for(const q of qs){ const pts=Number(q.points||1); max+=pts; if(q.type==='mcq' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='truefalse' && String(ans[q.id])===String(q.answer)) score+=pts; }
+    for(const q of qs){ const pts=Number(q.points||1); max+=pts; if(q.type==='mcq' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='truefalse' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='fill' && String(ans[q.id]??'').trim().toLocaleLowerCase('vi-VN')===String(q.answer??'').trim().toLocaleLowerCase('vi-VN')) score+=pts; }
     await env.DB.prepare(`UPDATE exam_attempts SET answers_json=?,event_log_json=?,score=?,max_score=?,status='submitted',submitted_at=CURRENT_TIMESTAMP WHERE id=?`).bind(JSON.stringify(ans),JSON.stringify(b.events||[]),score,max,a.id).run(); return ok({score,max_score:max,show_score:a.show_score!==0});
   }
 
   if(path==='/api/exam-center' && method==='GET'){
-    const u=await requireUser(request,env); const rows=await env.DB.prepare(`SELECT e.id,e.title,e.instructions,e.duration_minutes,e.strict_mode,e.status,e.opens_at,e.closes_at,e.max_attempts,e.show_score,e.fullscreen_required,e.terminate_on_exit,c.name class_name,a.id attempt_id,a.status attempt_status,a.score,a.max_score,a.closed_reason FROM exams e JOIN classes c ON c.id=e.class_id JOIN class_members cm ON cm.class_id=e.class_id AND cm.user_id=? AND cm.status='active' LEFT JOIN exam_attempts a ON a.id=(SELECT aa.id FROM exam_attempts aa WHERE aa.exam_id=e.id AND aa.user_id=? ORDER BY aa.started_at DESC LIMIT 1) WHERE e.status='published' ORDER BY COALESCE(e.opens_at,e.created_at) DESC`).bind(u.user_id,u.user_id).all(); return ok({exams:rows.results||[]});
+    const u=await requireUser(request,env); const rows=await env.DB.prepare(`SELECT e.id,e.title,e.instructions,e.duration_minutes,e.strict_mode,e.status,e.opens_at,e.closes_at,e.max_attempts,e.show_score,e.fullscreen_required,e.terminate_on_exit,e.assessment_type,e.assessment_label,e.center_label,c.name class_name,a.id attempt_id,a.status attempt_status,a.score,a.max_score,a.closed_reason FROM exams e JOIN classes c ON c.id=e.class_id JOIN class_members cm ON cm.class_id=e.class_id AND cm.user_id=? AND cm.status='active' LEFT JOIN exam_attempts a ON a.id=(SELECT aa.id FROM exam_attempts aa WHERE aa.exam_id=e.id AND aa.user_id=? ORDER BY aa.started_at DESC LIMIT 1) WHERE e.status='published' ORDER BY COALESCE(e.opens_at,e.created_at) DESC`).bind(u.user_id,u.user_id).all(); return ok({exams:rows.results||[]});
   }
 
   const violation=path.match(/^\/api\/exam-attempts\/([^/]+)\/violation$/);
@@ -628,10 +684,10 @@ async function routeApi(request, env, ctx, url) {
 
   const examAttemptGet=path.match(/^\/api\/exam-attempts\/([^/]+)$/);
   if(examAttemptGet && method==='GET'){
-    const u=await requireUser(request,env); const a=await env.DB.prepare(`SELECT a.*,e.title,e.instructions,e.duration_minutes,e.strict_mode,e.fullscreen_required,e.terminate_on_exit,e.show_score,e.question_json FROM exam_attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=? AND a.user_id=?`).bind(examAttemptGet[1],u.user_id).first();
+    const u=await requireUser(request,env); const a=await env.DB.prepare(`SELECT a.*,e.title,e.instructions,e.duration_minutes,e.strict_mode,e.fullscreen_required,e.terminate_on_exit,e.show_score,e.assessment_type,e.assessment_label,e.center_label,e.question_json FROM exam_attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=? AND a.user_id=?`).bind(examAttemptGet[1],u.user_id).first();
     if(!a)return bad('Không tìm thấy phiên kiểm tra.',404); if(a.status!=='in_progress')return bad('Phiên kiểm tra đã kết thúc.',409,{status:a.status,score:a.score,max_score:a.max_score});
     const deadline=new Date(a.started_at).getTime()+Number(a.duration_minutes||30)*60000; if(Date.now()>=deadline){await env.DB.prepare(`UPDATE exam_attempts SET status='expired',submitted_at=CURRENT_TIMESTAMP WHERE id=? AND status='in_progress'`).bind(a.id).run();return bad('Thời gian làm bài đã kết thúc.',409,{status:'expired'});}
-    return ok({attempt_id:a.id,exam:{id:a.exam_id,title:a.title,instructions:a.instructions,duration_minutes:a.duration_minutes,strict_mode:a.strict_mode,fullscreen_required:a.fullscreen_required,terminate_on_exit:a.terminate_on_exit,show_score:a.show_score,questions:JSON.parse(a.question_json||'[]')},answers:JSON.parse(a.answers_json||'{}'),events:JSON.parse(a.event_log_json||'[]'),remaining_seconds:Math.max(0,Math.ceil((deadline-Date.now())/1000))});
+    return ok({attempt_id:a.id,exam:{id:a.exam_id,title:a.title,instructions:a.instructions,duration_minutes:a.duration_minutes,strict_mode:a.strict_mode,fullscreen_required:a.fullscreen_required,terminate_on_exit:a.terminate_on_exit,show_score:a.show_score,assessment_type:a.assessment_type,assessment_label:a.assessment_label,center_label:a.center_label,questions:JSON.parse(a.question_json||'[]')},answers:JSON.parse(a.answers_json||'{}'),events:JSON.parse(a.event_log_json||'[]'),remaining_seconds:Math.max(0,Math.ceil((deadline-Date.now())/1000))});
   }
 
   const chatMatch=path.match(/^\/api\/classes\/([^/]+)\/chat$/);
@@ -871,6 +927,33 @@ async function routeApi(request, env, ctx, url) {
     return ok({allowed,enabled:allowed&&settings.beauty_enabled!=='0',config:allowed?{smooth:Number(settings.beauty_smooth_default||0.20),brightness:Number(settings.beauty_brightness_default||0.10),contrast:Number(settings.beauty_contrast_default||0.05),background:settings.beauty_background_enabled!=='0'}:{}});
   }
 
+  if(path==='/api/admin/website/revisions' && method==='GET'){
+    await requireRole(request,env,['super_admin','school_admin']);
+    const rows=await env.DB.prepare(`SELECT id,note,created_by,created_at FROM website_revisions ORDER BY created_at DESC LIMIT 50`).all();
+    return ok({revisions:rows.results||[]});
+  }
+  const websiteRevision=path.match(/^\/api\/admin\/website\/revisions\/([^/]+)$/);
+  if(websiteRevision && method==='GET'){
+    await requireRole(request,env,['super_admin','school_admin']);
+    const row=await env.DB.prepare(`SELECT * FROM website_revisions WHERE id=?`).bind(websiteRevision[1]).first();
+    if(!row)return bad('Không tìm thấy phiên bản website.',404);
+    let snapshot={};try{snapshot=JSON.parse(row.snapshot_json||'{}')}catch{}
+    return ok({revision:{...row,snapshot}});
+  }
+  const websiteRestore=path.match(/^\/api\/admin\/website\/revisions\/([^/]+)\/restore$/);
+  if(websiteRestore && method==='POST'){
+    const admin=await requireRole(request,env,['super_admin','school_admin']);
+    const row=await env.DB.prepare(`SELECT * FROM website_revisions WHERE id=?`).bind(websiteRestore[1]).first();
+    if(!row)return bad('Không tìm thấy phiên bản website.',404);
+    let snapshot={};try{snapshot=JSON.parse(row.snapshot_json||'{}')}catch{return bad('Phiên bản website bị lỗi dữ liệu.',409)}
+    const current=await getSettings(env);
+    await env.DB.prepare(`INSERT INTO website_revisions(id,snapshot_json,note,created_by,created_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),JSON.stringify(current),'Tự động lưu trước khi khôi phục',admin.user_id).run();
+    const stmts=Object.entries(snapshot).slice(0,300).map(([k,v])=>env.DB.prepare(`INSERT INTO system_settings(key,value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`).bind(k,String(v??'')));
+    if(stmts.length)await env.DB.batch(stmts);
+    await adminLog(env,admin.user_id,'website.revision.restore',{revision_id:row.id});
+    return ok({restored:true});
+  }
+
   if(path==='/api/admin/settings' && method==='GET'){
     const admin=await requireRole(request,env,['super_admin','school_admin']); const all=await getSettings(env);
     if(admin.role==='super_admin') return ok({settings:all});
@@ -878,7 +961,7 @@ async function routeApi(request, env, ctx, url) {
     return ok({settings:Object.fromEntries(allowed.filter(k=>Object.prototype.hasOwnProperty.call(all,k)).map(k=>[k,all[k]]))});
   }
   if(path==='/api/admin/settings' && method==='PUT'){
-    const admin=await requireRole(request,env,['super_admin','school_admin']); const b=await request.json(); let allowed=['live_room_max_participants','site_primary_color','site_primary_dark','site_background_color','site_surface_color','site_text_color','site_muted_color','site_border_color','site_soft_color','site_danger_color','site_radius','site_button_radius','site_input_radius','site_content_width','site_font_scale','site_shadow_opacity','site_header_style','site_auth_footer','site_reduce_motion','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','site_header_title','site_header_subtitle','footer_connect_eyebrow','footer_connect_title','footer_connect_text','footer_ctt_label','footer_ctt_url','footer_tnv_label','footer_tnv_url','footer_game_label','footer_game_url','footer_web_label','footer_web_url','footer_facebook_label','footer_facebook_url','footer_tiktok_label','footer_tiktok_url','footer_instagram_label','footer_instagram_url','footer_zalo_label','footer_zalo_url','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_hero_eyebrow','public_hero_side_title','public_hero_side_text','public_feature_1_title','public_feature_1_text','public_feature_2_title','public_feature_2_text','public_feature_3_title','public_feature_3_text','public_feature_4_title','public_feature_4_text','public_learner_title','public_learner_text','public_learner_quote','public_teacher_title','public_teacher_text','public_teacher_before_title','public_teacher_before_text','public_teacher_during_title','public_teacher_during_text','public_teacher_after_title','public_teacher_after_text','public_safety_title','public_safety_text','public_faq_title','public_faq_1_q','public_faq_1_a','public_faq_2_q','public_faq_2_a','public_faq_3_q','public_faq_3_a','public_faq_4_q','public_faq_4_a','public_cta_title','public_cta_text','public_status_text','beauty_enabled','beauty_owner_user_id','beauty_smooth_default','beauty_brightness_default','beauty_contrast_default','beauty_background_enabled','beauty_advanced_admin_enabled']; if(admin.role!=='super_admin'){const safePrefixes=['site_','public_','footer_']; const safeExact=new Set(['support_email','account_request_enabled','maintenance_mode','maintenance_message','allow_guest_live','default_class_unit']); allowed=allowed.filter(k=>safePrefixes.some(p=>k.startsWith(p))||safeExact.has(k))} const statements=[];
+    const admin=await requireRole(request,env,['super_admin','school_admin']); const b=await request.json(); const before=await getSettings(env); await env.DB.prepare(`INSERT INTO website_revisions(id,snapshot_json,note,created_by,created_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),JSON.stringify(before),str(b.__revision_note||'Trước khi cập nhật Website Studio'),admin.user_id).run(); delete b.__revision_note; let allowed=['live_room_max_participants','site_primary_color','site_primary_dark','site_background_color','site_surface_color','site_text_color','site_muted_color','site_border_color','site_soft_color','site_danger_color','site_radius','site_button_radius','site_input_radius','site_content_width','site_font_scale','site_shadow_opacity','site_header_style','site_auth_footer','site_reduce_motion','public_intro_title','public_intro_text','public_about_title','public_about_text','site_name','site_name_en','site_header_title','site_header_subtitle','footer_connect_eyebrow','footer_connect_title','footer_connect_text','footer_ctt_label','footer_ctt_url','footer_tnv_label','footer_tnv_url','footer_game_label','footer_game_url','footer_web_label','footer_web_url','footer_facebook_label','footer_facebook_url','footer_tiktok_label','footer_tiktok_url','footer_instagram_label','footer_instagram_url','footer_zalo_label','footer_zalo_url','support_email','system_email','account_request_enabled','maintenance_mode','maintenance_message','default_session_days','allow_guest_live','default_class_unit','footer_product_text','footer_copyright','live_mesh_max_peers','login_rate_limit','max_upload_mb','account_portrait_max_mb','account_document_max_mb','public_hero_eyebrow','public_hero_side_title','public_hero_side_text','public_feature_1_title','public_feature_1_text','public_feature_2_title','public_feature_2_text','public_feature_3_title','public_feature_3_text','public_feature_4_title','public_feature_4_text','public_learner_title','public_learner_text','public_learner_quote','public_teacher_title','public_teacher_text','public_teacher_before_title','public_teacher_before_text','public_teacher_during_title','public_teacher_during_text','public_teacher_after_title','public_teacher_after_text','public_safety_title','public_safety_text','public_faq_title','public_faq_1_q','public_faq_1_a','public_faq_2_q','public_faq_2_a','public_faq_3_q','public_faq_3_a','public_faq_4_q','public_faq_4_a','public_cta_title','public_cta_text','public_status_text','beauty_enabled','beauty_owner_user_id','beauty_smooth_default','beauty_brightness_default','beauty_contrast_default','beauty_background_enabled','beauty_advanced_admin_enabled']; if(admin.role!=='super_admin'){const safePrefixes=['site_','public_','footer_']; const safeExact=new Set(['support_email','account_request_enabled','maintenance_mode','maintenance_message','allow_guest_live','default_class_unit']); allowed=allowed.filter(k=>safePrefixes.some(p=>k.startsWith(p))||safeExact.has(k))} const statements=[];
     for(const key of allowed){if(Object.prototype.hasOwnProperty.call(b,key))statements.push(env.DB.prepare(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(key,str(b[key]),admin.user_id));}
     if(statements.length)await env.DB.batch(statements); await adminLog(env,admin.user_id,'settings.update',{keys:statements.length}); return ok({settings:await getSettings(env)});
   }
@@ -1130,6 +1213,36 @@ async function routeApi(request, env, ctx, url) {
   }
 
 
+  // V39 Operations Center: custom IAM roles, organization-scoped automation and analytics.
+  if(path==='/api/admin/v39/overview' && method==='GET'){
+    const admin=await requireRole(request,env,['super_admin','school_admin']); const org=await requireOrganizationContext(request,env,admin);
+    const q=async(sql,...args)=>{try{return await env.DB.prepare(sql).bind(...args).first()}catch{return {n:0}}};
+    const [members,classes,assessments,events,rules]=await Promise.all([
+      q(`SELECT COUNT(*) n FROM organization_members WHERE organization_id=? AND status='active'`,org),
+      q(`SELECT COUNT(*) n FROM classes WHERE COALESCE(organization_id,'sky-first')=? AND status='active'`,org),
+      q(`SELECT COUNT(*) n FROM exams WHERE COALESCE(organization_id,'sky-first')=?`,org),
+      q(`SELECT COUNT(*) n FROM analytics_events WHERE organization_id=? AND created_at>=datetime('now','-30 days')`,org),
+      q(`SELECT COUNT(*) n FROM automation_rules WHERE organization_id=? AND enabled=1`,org)
+    ]); return ok({organization_id:org,members:members?.n||0,classes:classes?.n||0,assessments:assessments?.n||0,events_30d:events?.n||0,automation_rules:rules?.n||0});
+  }
+  if(path==='/api/admin/v39/roles' && method==='GET'){
+    const admin=await requireRole(request,env,['super_admin','school_admin']);const org=await requireOrganizationContext(request,env,admin);
+    const rows=await env.DB.prepare(`SELECT r.*,GROUP_CONCAT(p.permission) permissions FROM custom_roles r LEFT JOIN role_permissions p ON p.role_id=r.id AND p.allowed=1 WHERE r.organization_id=? GROUP BY r.id ORDER BY r.name`).bind(org).all().catch(()=>({results:[]}));return ok({roles:rows.results||[]});
+  }
+  if(path==='/api/admin/v39/roles' && method==='POST'){
+    const admin=await requireRole(request,env,['super_admin','school_admin']);const org=await requireOrganizationContext(request,env,admin);const b=await request.json();const name=str(b.name).slice(0,80);if(name.length<2)return bad('Tên vai trò chưa hợp lệ.');const id=crypto.randomUUID();await env.DB.prepare(`INSERT INTO custom_roles(id,organization_id,name,description,created_by) VALUES(?,?,?,?,?)`).bind(id,org,name,str(b.description).slice(0,500),admin.user_id).run();for(const permission of (Array.isArray(b.permissions)?b.permissions:[]).slice(0,100)){const x=str(permission).slice(0,100);if(x)await env.DB.prepare(`INSERT OR IGNORE INTO role_permissions(role_id,permission,allowed) VALUES(?,?,1)`).bind(id,x).run()}await adminLog(env,admin.user_id,'iam.role.create',{organization_id:org,role_id:id,name});return ok({id});
+  }
+  if(path==='/api/admin/v39/automations' && method==='GET'){
+    const admin=await requireRole(request,env,['super_admin','school_admin']);const org=await requireOrganizationContext(request,env,admin);const rows=await env.DB.prepare(`SELECT * FROM automation_rules WHERE organization_id=? ORDER BY updated_at DESC`).bind(org).all().catch(()=>({results:[]}));return ok({rules:rows.results||[]});
+  }
+  if(path==='/api/admin/v39/automations' && method==='POST'){
+    const admin=await requireRole(request,env,['super_admin','school_admin']);const org=await requireOrganizationContext(request,env,admin);const b=await request.json();const allowedTriggers=['account.created','assessment.published','assessment.submitted','assignment.due','ticket.stale'];const allowedActions=['notification.create','email.send','audit.record'];if(!allowedTriggers.includes(b.trigger_key)||!allowedActions.includes(b.action_key))return bad('Trigger hoặc action chưa được hỗ trợ.');const id=crypto.randomUUID();await env.DB.prepare(`INSERT INTO automation_rules(id,organization_id,name,trigger_key,action_key,config_json,enabled,created_by) VALUES(?,?,?,?,?,?,?,?)`).bind(id,org,str(b.name||'Quy tắc tự động').slice(0,120),b.trigger_key,b.action_key,JSON.stringify(b.config||{}),b.enabled===false?0:1,admin.user_id).run();await adminLog(env,admin.user_id,'automation.create',{organization_id:org,rule_id:id});return ok({id});
+  }
+  if(path==='/api/admin/v39/analytics' && method==='GET'){
+    const admin=await requireRole(request,env,['super_admin','school_admin']);const org=await requireOrganizationContext(request,env,admin);
+    const rows=await env.DB.prepare(`SELECT event_key,COUNT(*) count,ROUND(AVG(value_num),2) average_value FROM analytics_events WHERE organization_id=? AND created_at>=datetime('now','-30 days') GROUP BY event_key ORDER BY count DESC LIMIT 50`).bind(org).all().catch(()=>({results:[]}));return ok({window_days:30,metrics:rows.results||[]});
+  }
+
   // Master requirements 1-35: profile identity, organizations, calendar, resources and notifications.
   if(path==='/api/account/profile' && method==='GET'){
     const u=await requireUser(request,env);
@@ -1264,6 +1377,7 @@ export async function handleApiRequest(request, env, ctx) {
   try {
     if(!url.pathname.startsWith('/api/')) return secureResponse(bad(`Đường dẫn không thuộc API: ${request.method} ${url.pathname}`,404,{code:'NOT_API_PATH',area:'API_ENTRY',method:request.method,path:url.pathname}),requestId);
     if(request.method==='OPTIONS') return secureResponse(new Response(null,{status:204}),requestId);
+    if(!trustedRequestOrigin(request,env)) return secureResponse(bad('Nguồn yêu cầu không hợp lệ.',403,{code:'ORIGIN_NOT_ALLOWED'}),requestId);
 
     // SETUP/HẠ TẦNG PHẢI CHẠY TRƯỚC SESSION PREFLIGHT.
     // Trình duyệt có thể còn cookie phiên cũ từ một deployment trước. Nếu schema

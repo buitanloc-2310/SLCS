@@ -72,9 +72,10 @@ for(const f of jsFiles){
   while((m=importRe.exec(txt))){
     const spec=m[1];
     if(spec.startsWith('http')||spec.startsWith('node:')) continue;
+    const specPath=spec.split(/[?#]/,1)[0];
     let target;
-    if(spec.startsWith('/')) target=path.join(root,'public',spec.slice(1));
-    else if(spec.startsWith('.')) target=path.resolve(path.dirname(f),spec);
+    if(specPath.startsWith('/')) target=path.join(root,'public',specPath.slice(1));
+    else if(specPath.startsWith('.')) target=path.resolve(path.dirname(f),specPath);
     else continue;
     if(!fs.existsSync(target)) fail(`broken import: ${path.relative(root,f)} -> ${spec}`);
   }
@@ -87,7 +88,8 @@ for(const f of jsFiles){
   const txt=fs.readFileSync(f,'utf8'); let m;
   while((m=namedImportRe.exec(txt))){
     const spec=m[2]; if(!(spec.startsWith('.')||spec.startsWith('/'))) continue;
-    const target=spec.startsWith('/')?path.join(root,'public',spec.slice(1)):path.resolve(path.dirname(f),spec);
+    const specPath=spec.split(/[?#]/,1)[0];
+    const target=specPath.startsWith('/')?path.join(root,'public',specPath.slice(1)):path.resolve(path.dirname(f),specPath);
     if(!fs.existsSync(target)) continue;
     const targetText=fs.readFileSync(target,'utf8');
     for(const raw of m[1].split(',')){

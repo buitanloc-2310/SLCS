@@ -1,6 +1,6 @@
 {
   "name": "sfn-slc",
-  "version": "33.0.0-p2-release-max",
+  "version": "40.0.0-p2-production",
   "private": true,
   "type": "module",
   "scripts": {
@@ -20,9 +20,17 @@
     "validate:p23": "npm run validate:p22 && node scripts/validate-p23.mjs",
     "validate:p24": "npm run validate:p23 && npm run validate:p2 && node scripts/validate-p24.mjs",
     "validate:final": "npm run validate:p24 && node scripts/validate-final.mjs",
-    "validate:release": "npm run validate:final && node scripts/validate-v33-release.mjs"
+    "validate:release": "npm run validate:final && node scripts/validate-v33-release.mjs",
+    "validate:v34": "npm run validate:release && node scripts/validate-v34.mjs",
+    "validate:v35": "npm run validate:v34 && node scripts/validate-v35.mjs",
+    "validate:v36": "npm run validate:v35 && node scripts/validate-v36.mjs",
+    "validate:v37": "npm run validate:v36 && node scripts/validate-v37.mjs",
+    "validate:v38": "npm run validate:v37 && node scripts/validate-v38.mjs",
+    "validate:v39": "npm run validate:v38 && node scripts/validate-v39.mjs",
+    "validate:v40": "npm run validate:v39 && node scripts/validate-v40.mjs",
+    "validate:production": "npm run validate:v40"
   },
   "devDependencies": {
-    "wrangler": "^4.34.0"
+    "wrangler": "4.34.0"
   }
 }

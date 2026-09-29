@@ -38,7 +38,7 @@ check('operations/IAM present',api.includes('/api/admin/v39/roles')&&api.include
 check('mic/camera browser APIs present',sourceRuntime.includes('getUserMedia')&&sourceRuntime.includes('enumerateDevices')&&sourceRuntime.includes('devicechange'));
 check('media recovery present',media.includes('recoverIce')&&media.includes('replaceTrack'));
 check('camera/mic permissions header present',api.includes("permissions-policy':'camera=(self), microphone=(self), display-capture=(self)"));
-check('footer labels hide raw URLs',app.includes("link('ctt','Cổng thông tin'")&&app.includes("link('zalo','Zalo / Hotline'")&&app.includes('>${esc(text)}</a>'));
+check('footer labels hide raw URLs',app.includes("link('ctt','Cổng thông tin'")&&app.includes("link('zalo','Zalo / Hotline'")&&(app.includes('>${esc(text)}</a>')||app.includes('>${esc(labelText)}</a>')));
 check('runtime AI endpoints absent',!sourceRuntime.includes('/api/ai')&&!sourceRuntime.toLowerCase().includes('sky first ai')&&!sourceRuntime.includes('OPENAI_API_KEY')&&!sourceRuntime.includes('AI_API_KEY'));
 check('legacy AI storage only appears as DROP migration',!app.match(/ai_(messages|conversations|audit|action_requests|rate_limits)/)&&!api.match(/ai_(messages|conversations|audit|action_requests|rate_limits)/));
 check('asset build token is neutral',!!build&&!/40\.0|v40/i.test(build));

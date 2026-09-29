@@ -89,7 +89,7 @@ async function tokenFingerprint(v=''){
 function htmlEsc(s=''){return String(s ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function validEmail(s=''){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(s));}
 async function sha256Text(s=''){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(s)));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');}
-async function requireClassMember(env,classId,userId,roles=null){const m=await env.DB.prepare(`SELECT role,status FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(classId,userId).first();if(!m)throw Object.assign(new Error('FORBIDDEN'),{status:403});if(roles&&!roles.includes(m.role))throw Object.assign(new Error('FORBIDDEN'),{status:403});return m;}
+async function requireClassMember(env,classId,userId,roles=null){let m=await env.DB.prepare(`SELECT role,status FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(classId,userId).first();if(!m){const admin=await env.DB.prepare(`SELECT role FROM users WHERE id=? AND status='active'`).bind(userId).first();if(admin&&['school_admin','super_admin'].includes(admin.role))m={role:admin.role,status:'active'};}if(!m)throw Object.assign(new Error('FORBIDDEN'),{status:403});if(roles&&!roles.includes(m.role)&&!['school_admin','super_admin'].includes(m.role))throw Object.assign(new Error('FORBIDDEN'),{status:403});return m;}
 async function requireLiveAccess(env,classId,token){
   const clean=str(token); if(!clean||!classId)throw Object.assign(new Error('LIVE_AUTH'),{status:401});
   const row=await env.DB.prepare(`SELECT t.class_id,t.user_id,t.guest_name,t.role,t.expires_at,COALESCE(u.full_name,t.guest_name,'Guest') display_name FROM live_access_tokens t LEFT JOIN users u ON u.id=t.user_id WHERE t.token=? AND t.class_id=? AND t.expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(clean,classId).first();
@@ -219,7 +219,12 @@ async function runSchemaStage(env, stage){
       await env.DB.prepare(sql).run();
       completed.push(i+1);
     }catch(error){
-      const e=new Error(error?.message || String(error) || 'D1 statement failed');
+      const message=String(error?.message||error||'');
+      // The web installer doubles as an in-place repair path. Canonical migrations
+      // contain ADD COLUMN statements which are expected to report duplicate-column
+      // when an older production database already received that migration.
+      if(/duplicate column name/i.test(message)){completed.push(i+1);continue;}
+      const e=new Error(message || 'D1 statement failed');
       e.code='SETUP_SCHEMA_STATEMENT_FAILED';
       e.stage=stage.name;
       e.statement_index=i+1;
@@ -547,7 +552,7 @@ async function routeApi(request, env, ctx, url) {
   const postsMatch=path.match(/^\/api\/classes\/([^/]+)\/posts$/);
   if(postsMatch && method==='GET'){
     const u=await requireUser(request,env); const id=postsMatch[1];
-    const member=await env.DB.prepare(`SELECT 1 ok FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(id,u.user_id).first(); if(!member)return bad('Không có quyền.',403);
+    await requireClassMember(env,id,u.user_id);
     const rows=await env.DB.prepare(`SELECT p.*,u.full_name author FROM class_posts p JOIN users u ON u.id=p.author_user_id WHERE p.class_id=? ORDER BY p.pinned DESC,p.created_at DESC LIMIT 100`).bind(id).all(); return ok({posts:rows.results});
   }
   if(postsMatch && method==='POST'){
@@ -558,7 +563,7 @@ async function routeApi(request, env, ctx, url) {
 
   const matsMatch=path.match(/^\/api\/classes\/([^/]+)\/materials$/);
   if(matsMatch && method==='GET'){
-    const u=await requireUser(request,env); const id=matsMatch[1]; const m=await env.DB.prepare(`SELECT 1 ok FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(id,u.user_id).first(); if(!m)return bad('Không có quyền.',403);
+    const u=await requireUser(request,env); const id=matsMatch[1]; await requireClassMember(env,id,u.user_id);
     const rows=await env.DB.prepare(`SELECT m.*,f.name,f.mime,f.size FROM materials m JOIN files f ON f.id=m.file_id WHERE m.class_id=? ORDER BY m.created_at DESC`).bind(id).all(); return ok({materials:rows.results});
   }
   if(matsMatch && method==='POST'){
@@ -624,7 +629,7 @@ async function routeApi(request, env, ctx, url) {
   }
   if(examsMatch && method==='POST'){
     const u=await requireUser(request,env); const id=examsMatch[1]; const m=await env.DB.prepare(`SELECT role FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(id,u.user_id).first(); if(!m||!['teacher','assistant'].includes(m.role))return bad('Không có quyền.',403);
-    const b=await request.json(); const title=str(b.title), questions=Array.isArray(b.questions)?b.questions.slice(0,300):[]; if(!title)return bad('Tên bài kiểm tra không được để trống.'); if(!questions.length)return bad('Bài kiểm tra cần ít nhất một câu hỏi.'); const clean=questions.map(q=>({id:str(q.id)||crypto.randomUUID(),type:['mcq','truefalse','short','essay','fill','multi','matching','ordering'].includes(q.type)?q.type:'mcq',question:str(q.question).slice(0,3000),options:Array.isArray(q.options)?q.options.slice(0,8).map(x=>str(x).slice(0,500)):[],answer:str(q.answer).slice(0,1000),points:Math.max(.25,Math.min(100,Number(q.points||1)))})).filter(q=>q.question); if(!clean.length)return bad('Không có câu hỏi hợp lệ.'); const eid=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO exams(id,class_id,title,instructions,duration_minutes,strict_mode,question_json,status,created_by,created_at,opens_at,closes_at,max_attempts,show_score,fullscreen_required,terminate_on_exit,assessment_type,assessment_label,center_label) VALUES(?,?,?,?,?,?,?,'published',?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?)`).bind(eid,id,title,str(b.instructions).slice(0,5000),Math.max(1,Math.min(720,Number(b.duration_minutes||30))),b.strict_mode?1:0,JSON.stringify(clean),u.user_id,str(b.opens_at)||null,str(b.closes_at)||null,Math.max(1,Math.min(10,Number(b.max_attempts||1))),b.show_score===false?0:1,b.fullscreen_required||b.strict_mode?1:0,b.terminate_on_exit||b.strict_mode?1:0,['official_exam','class_test','volunteer_evaluation','selection','competition','survey','custom'].includes(str(b.assessment_type))?str(b.assessment_type):'class_test',str(b.assessment_label).slice(0,120)||({official_exam:'Kỳ thi chính thức',class_test:'Kiểm tra lớp học',volunteer_evaluation:'Đánh giá TNV',selection:'Tuyển chọn / Sát hạch',competition:'Cuộc thi kiến thức',survey:'Khảo sát',custom:'Đánh giá tùy chỉnh'}[str(b.assessment_type)]||'Kiểm tra lớp học'),str(b.center_label).slice(0,120)||'Trung tâm Đánh giá').run(); return ok({id:eid});
+    const b=await request.json(); const title=str(b.title), questions=Array.isArray(b.questions)?b.questions.slice(0,300):[]; if(!title)return bad('Tên bài kiểm tra không được để trống.'); if(!questions.length)return bad('Bài kiểm tra cần ít nhất một câu hỏi.'); const clean=questions.map(q=>({id:str(q.id)||crypto.randomUUID(),type:['mcq','truefalse','short','essay','fill','multi','matching','ordering'].includes(q.type)?q.type:'mcq',question:str(q.question).slice(0,3000),options:Array.isArray(q.options)?q.options.slice(0,8).map(x=>str(x).slice(0,500)):[],answer:str(q.answer).slice(0,1000),points:Math.max(.25,Math.min(100,Number(q.points||1)))})).filter(q=>q.question); if(!clean.length)return bad('Không có câu hỏi hợp lệ.'); const eid=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO exams(id,class_id,title,instructions,duration_minutes,strict_mode,question_json,status,created_by,created_at,opens_at,closes_at,max_attempts,show_score,fullscreen_required,terminate_on_exit,assessment_type,assessment_label,center_label) VALUES(?,?,?,?,?,?,?,'published',?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?)`).bind(eid,id,title,str(b.instructions).slice(0,5000),Math.max(1,Math.min(720,Number(b.duration_minutes||30))),b.strict_mode?1:0,JSON.stringify(clean),u.user_id,str(b.opens_at)||null,str(b.closes_at)||null,Math.max(1,Math.min(10,Number(b.max_attempts||1))),b.show_score===false?0:1,b.fullscreen_required||b.strict_mode?1:0,b.terminate_on_exit||b.strict_mode?1:0,['official_exam','class_test','volunteer_evaluation','selection','competition','survey','custom'].includes(str(b.assessment_type))?str(b.assessment_type):'class_test',str(b.assessment_label).slice(0,120)||({official_exam:'Kỳ thi chính thức',class_test:'Kiểm tra lớp học',volunteer_evaluation:'Đánh giá TNV',selection:'Tuyển chọn / Sát hạch',competition:'Cuộc thi kiến thức',survey:'Khảo sát',custom:'Đánh giá tùy chỉnh'}[str(b.assessment_type)]||'Kiểm tra lớp học'),str(b.center_label).slice(0,120)||'Trung tâm Đánh giá').run(); return ok({id:eid});
   }
 
   const startExam=path.match(/^\/api\/exams\/([^/]+)\/start$/);

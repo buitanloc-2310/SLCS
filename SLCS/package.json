@@ -28,7 +28,8 @@
     "validate:v38": "npm run validate:v37 && node scripts/validate-v38.mjs",
     "validate:v39": "npm run validate:v38 && node scripts/validate-v39.mjs",
     "validate:v40": "npm run validate:v39 && node scripts/validate-v40.mjs",
-    "validate:production": "npm run validate:v40"
+    "validate:production": "npm run validate:v40 && node scripts/validate-production-repair.mjs",
+    "deploy:production": "npm run validate:production && npm run db:migrate && npm run deploy"
   },
   "devDependencies": {
     "wrangler": "4.34.0"

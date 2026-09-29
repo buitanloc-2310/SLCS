@@ -2,8 +2,8 @@ import fs from 'node:fs';
 const read=p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const app=read('public/app.js'),ui=read('public/ui-system.js'),css=read('public/design-system.css'),idx=read('public/index.html'),pkg=read('package.json');
 const checks=[
- ['V35 cache assets',/\?v=(?:35|36|37|38|39|40)\.0\.0/.test(idx)],
- ['UI runtime module',/from '\/ui-system\.js(?:\?v=40\.0\.0)?'/.test(app)&&ui.includes('syncUiContext')],
+ ['V35 cache assets',/\?v=(?:(?:35|36|37|38|39)\.0\.0|40\.0\.[01])/.test(idx)],
+ ['UI runtime module',/from '\/ui-system\.js(?:\?v=40\.0\.[01])?'/.test(app)&&ui.includes('syncUiContext')],
  ['Route/area context',ui.includes('dataset.area')&&ui.includes('dataset.route')],
  ['Unified admin palette',css.includes('var(--site-primary')&&css.includes('var(--site-bg')&&css.includes('var(--site-text')],
  ['Responsive product shell',css.includes('@media(max-width:680px)')&&css.includes('100dvh')],

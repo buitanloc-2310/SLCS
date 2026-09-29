@@ -9,7 +9,7 @@ const wrangler=JSON.parse(read('wrangler.json'));
 const pkg=JSON.parse(read('package.json'));
 const checks=[
   ['V40 production version',String(pkg.version).startsWith('40.0.0-p2-production')],
-  ['V40 cache bust',idx.includes('/app.js?v=40.0.0')&&idx.includes('/design-system.css?v=40.0.0')&&app.includes('/ui-system.js?v=40.0.0')],
+  ['V40 cache bust',idx.includes('/app.js?v=40.0.1')&&idx.includes('/design-system.css?v=40.0.1')&&app.includes('/ui-system.js?v=40.0.1')],
   ['safeHttpUrl runtime guard',app.indexOf('function safeHttpUrl(')>=0&&app.indexOf('function safeHttpUrl(')<app.indexOf('function footer(')&&app.includes("['http:','https:'].includes(u.protocol)")],
   ['API collection runtime hardening',app.includes('function arr(v)')&&app.includes('arr(emails.logs).slice')&&app.includes('arr(activity.activity).slice')&&app.includes('arr(diagnostics.checks).map')],
   ['Operations route uses admin shell',ui.includes("'admin-operations':'admin'")],

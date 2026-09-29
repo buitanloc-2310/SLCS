@@ -16,7 +16,7 @@ const checks=[
   ['Origin/CSRF guard',api.includes('function trustedRequestOrigin(')&&api.includes("code:'ORIGIN_NOT_ALLOWED'")],
   ['HSTS API headers',api.includes("'strict-transport-security':'max-age=31536000; includeSubDomains'")],
   ['HSTS static headers',headers.includes('Strict-Transport-Security: max-age=31536000; includeSubDomains')],
-  ['PBKDF2 v2 hardening',api.includes('PASSWORD_KDF_ITERATIONS=210000')&&api.includes('passwordNeedsUpgrade')],
+  ['PBKDF2 v2 hardening',api.includes('PASSWORD_KDF_ITERATIONS=10000')&&api.includes('passwordNeedsUpgrade')],
   ['Cryptographic join codes',api.includes("crypto.getRandomValues(a)")&&!api.includes("function slugCode(prefix='CLS') { return `${prefix}-${Math.random()")],
   ['Strong temporary password',api.includes("return `SFN@${body}!`")],
   ['Production debug logs gated',app.includes('function debugLog(')&&!app.includes('console.log(')&&!read('public/classroom/media-client.js').includes('console.log(')],

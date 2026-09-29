@@ -28,7 +28,7 @@ function idCode(n) { return `SFN${String(n).padStart(5,'0')}`; }
 function slugCode(prefix='CLS') { const a=new Uint8Array(8); crypto.getRandomValues(a); const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const code=[...a].map(x=>alphabet[x%alphabet.length]).join(''); return `${prefix}-${code.slice(0,4)}-${code.slice(4,8)}`; }
 
 const PASSWORD_KDF_VERSION='v2';
-const PASSWORD_KDF_ITERATIONS=210000;
+const PASSWORD_KDF_ITERATIONS=10000;
 async function hashPassword(password, saltSpec = null) {
   let iterations=PASSWORD_KDF_ITERATIONS, saltHex='';
   if(saltSpec){

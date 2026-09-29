@@ -2,7 +2,7 @@ import { LiveRoom } from './live-room.js';
 import { V11_SCHEMA_STAGES } from './schema-v11.js';
 import { realtimeSfuConfig, createRealtimeSession, addRealtimeTracks, renegotiateRealtimeSession, closeRealtimeTracks, ensureRealtimeSfuSchema } from './realtime-sfu.js';
 import { ensureV13Schema, getClassLiveSettings, safeJson, logLiveEvent } from './v13-platform.js';
-import { VPLUS, ensureVPlusSchema, recordPlatformEvent, hasPermission, requirePermission, safeUserMessage } from './vplus-platform.js';
+import { ensureVPlusSchema, recordPlatformEvent, hasPermission, requirePermission, safeUserMessage } from './vplus-platform.js';
 export { LiveRoom };
 
 const SECURITY_HEADERS = {'x-content-type-options':'nosniff','referrer-policy':'strict-origin-when-cross-origin','x-frame-options':'SAMEORIGIN','permissions-policy':'camera=(self), microphone=(self), display-capture=(self), geolocation=()','cross-origin-opener-policy':'same-origin-allow-popups','strict-transport-security':'max-age=31536000; includeSubDomains'};
@@ -50,7 +50,7 @@ function passwordNeedsUpgrade(salt=''){return !String(salt).startsWith(`${PASSWO
 async function getSession(request, env) {
   const token = cookieParse(request.headers.get('cookie') || '')[COOKIE];
   if (!token) return null;
-  const row = await env.DB.prepare(`SELECT s.id session_id,s.user_id,s.expires_at,u.sfn_no,u.sfn_id,u.full_name,u.email,u.phone,u.role,u.status,u.avatar_key FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at > CURRENT_TIMESTAMP AND u.status='active'`).bind(token).first();
+  const row = await env.DB.prepare(`SELECT s.id session_id,s.user_id,s.expires_at,u.sfn_no,COALESCE(u.sfn_id,'') sfn_id,COALESCE(u.full_name,'') full_name,COALESCE(u.email,'') email,COALESCE(u.phone,'') phone,COALESCE(u.role,'student') role,COALESCE(u.status,'active') status,COALESCE(u.avatar_key,'') avatar_key FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at > CURRENT_TIMESTAMP AND u.status='active'`).bind(token).first();
   return row || null;
 }
 async function requireUser(req, env) { const u=await getSession(req,env); if(!u) throw Object.assign(new Error('AUTH'),{status:401}); return u; }
@@ -277,6 +277,36 @@ async function ensureLatestSchema(env){
   return installSchema(env);
 }
 
+let runtimeSchemaVerified=false;
+let runtimeSchemaPromise=null;
+async function productionSchemaLooksReady(env){
+  if(!env?.DB)return false;
+  try{
+    const marker=await env.DB.prepare(`SELECT value FROM system_settings WHERE key='schema_version'`).first();
+    if(marker?.value!=='production')return false;
+    // Verify representative objects from every major generation. A stale marker
+    // must not allow session/auth queries to run against an incomplete database.
+    await env.DB.prepare(`SELECT organization_id FROM classes LIMIT 0`).all();
+    await env.DB.prepare(`SELECT assessment_type FROM exams LIMIT 0`).all();
+    await env.DB.prepare(`SELECT published FROM assignments LIMIT 0`).all();
+    await env.DB.prepare(`SELECT 1 FROM website_revisions LIMIT 0`).all();
+    await env.DB.prepare(`SELECT 1 FROM automation_rules LIMIT 0`).all();
+    await env.DB.prepare(`SELECT 1 FROM analytics_events LIMIT 0`).all();
+    return true;
+  }catch{return false}
+}
+async function ensureRuntimeSchema(env){
+  if(runtimeSchemaVerified)return true;
+  if(runtimeSchemaPromise)return runtimeSchemaPromise;
+  runtimeSchemaPromise=(async()=>{
+    if(!(await productionSchemaLooksReady(env)))await ensureLatestSchema(env);
+    if(!(await productionSchemaLooksReady(env)))throw new Error('Production schema verification failed');
+    runtimeSchemaVerified=true;
+    return true;
+  })();
+  try{return await runtimeSchemaPromise}finally{runtimeSchemaPromise=null}
+}
+
 async function adminLog(env,userId,action,detail={}){
   try{await env.DB.prepare(`INSERT INTO admin_activity(actor_user_id,action,detail_json,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)`).bind(userId||null,action,JSON.stringify(detail)).run()}catch{}
 }
@@ -304,10 +334,17 @@ async function routeApi(request, env, ctx, url) {
   if (path === '/api/setup/installer-info' && method === 'GET') return ok({ installer_available:true });
 
   if (path === '/api/setup/status' && method === 'GET') {
-    const ready=await schemaReady(env);
+    let ready=await schemaReady(env);
+    if(!ready){
+      try{await ensureRuntimeSchema(env);ready=await schemaReady(env)}catch{}
+    }
     if(!ready) return ok({schema_ready:false,initialized:false});
+    let marker=''; try{marker=str((await env.DB.prepare(`SELECT value FROM system_settings WHERE key='schema_version'`).first())?.value)}catch{}
+    if(marker!=='production'){
+      try{await ensureRuntimeSchema(env);marker='production'}catch{}
+    }
     const row=await env.DB.prepare(`SELECT COUNT(*) n FROM users`).first();
-    return ok({schema_ready:true,initialized:Number(row?.n||0)>0});
+    return ok({schema_ready:marker==='production',initialized:Number(row?.n||0)>0});
   }
 
   if (path === '/api/setup/install' && method === 'POST') {
@@ -440,7 +477,7 @@ async function routeApi(request, env, ctx, url) {
     const token=randomToken(32); const cfg=await getSettings(env).catch(()=>({})); const days=Math.max(1,Math.min(90,Number(cfg.default_session_days||env.SESSION_DAYS||30)));
     const exp=new Date(Date.now()+days*86400000).toISOString(); const ipHash=ip?await sha256Text(ip):'';
     await env.DB.prepare(`INSERT INTO sessions(token,user_id,ip_hash,user_agent,expires_at,created_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(token,u.id,ipHash,(request.headers.get('user-agent')||'').slice(0,500),exp).run();
-    return json({ok:true,user:{sfn_id:u.sfn_id,full_name:u.full_name,role:u.role}},200,{'set-cookie':sessionCookie(token,days)});
+    return json({ok:true,user:{sfn_id:str(u.sfn_id),full_name:str(u.full_name)||str(u.sfn_id)||'Thành viên Sky First',role:str(u.role)||'student'}},200,{'set-cookie':sessionCookie(token,days)});
   }
 
   if (path === '/api/auth/logout' && method === 'POST') {
@@ -450,8 +487,8 @@ async function routeApi(request, env, ctx, url) {
 
   if (path === '/api/auth/me' && method === 'GET') {
     const u=await getSession(request,env); if(!u) return ok({user:null});
-    const exam=await activeExam(u.user_id,env);
-    return ok({user:{id:u.user_id,sfn_id:u.sfn_id,full_name:u.full_name,email:u.email,phone:u.phone,role:u.role,avatar_key:u.avatar_key},active_exam:exam||null});
+    let exam=null;try{exam=await activeExam(u.user_id,env)}catch(error){console.error('[auth/me active exam]',error)}
+    return ok({user:{id:str(u.user_id),user_id:str(u.user_id),sfn_id:str(u.sfn_id)||'SFN',full_name:str(u.full_name)||str(u.sfn_id)||'Thành viên Sky First',email:str(u.email),phone:str(u.phone),role:str(u.role)||'student',avatar_key:str(u.avatar_key),status:'active'},active_exam:exam&&typeof exam==='object'?exam:null});
   }
 
   if (path === '/api/auth/activate' && method === 'POST') {
@@ -599,7 +636,7 @@ async function routeApi(request, env, ctx, url) {
     await env.DB.prepare(`INSERT INTO submissions(id,assignment_id,user_id,text_answer,file_id,status,submitted_at,updated_at) VALUES(?,?,?,?,?,'submitted',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(assignment_id,user_id) DO UPDATE SET text_answer=excluded.text_answer,file_id=COALESCE(excluded.file_id,submissions.file_id),status='submitted',submitted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),aid,u.user_id,str(form.get('text')),fileId).run(); return ok();
   }
 
-  // V36 Learning Core — Gradebook, progress and attendance.
+  // Learning Core — Gradebook, progress and attendance.
   const learningSummary=path.match(/^\/api\/classes\/([^/]+)\/learning-summary$/);
   if(learningSummary && method==='GET'){
     const u=await requireUser(request,env), classId=learningSummary[1]; const membership=await requireClassMember(env,classId,u.user_id);
@@ -1165,7 +1202,7 @@ async function routeApi(request, env, ctx, url) {
     const admin=await requireRole(request,env,['super_admin']); const r=await env.DB.prepare(`DELETE FROM sessions WHERE expires_at<=CURRENT_TIMESTAMP`).run(); await adminLog(env,admin.user_id,'system.cleanup_sessions',{changes:r.meta?.changes||0}); return ok({deleted:r.meta?.changes||0});
   }
 
-  // VPLUS: role-aware analytics. Infrastructure details never leave System Admin routes.
+  // Role-aware analytics. Infrastructure details never leave System Admin routes.
   const vplusAnalytics=path.match(/^\/api\/classes\/([^/]+)\/analytics$/);
   if(vplusAnalytics && method==='GET'){
     const u=await requireUser(request,env); const classId=vplusAnalytics[1];
@@ -1188,7 +1225,7 @@ async function routeApi(request, env, ctx, url) {
   }
 
   if(path==='/api/admin/system/upgrade' && method==='POST'){
-    const admin=await requireRole(request,env,['super_admin']); const upgrade=await ensureLatestSchema(env); await ensureRealtimeSfuSchema(env); await env.DB.prepare(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES('platform_version','VPLUS',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value='VPLUS',updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(admin.user_id).run(); await adminLog(env,admin.user_id,'system.schema_upgrade',{version:'VPLUS',completed:upgrade.completed}); await ensureV13Schema(env); await ensureVPlusSchema(env); return ok({version:'VPLUS',message:'Nền tảng đã được kiểm tra và cập nhật an toàn.',completed:upgrade.completed});
+    const admin=await requireRole(request,env,['super_admin']); const upgrade=await ensureLatestSchema(env); await ensureRealtimeSfuSchema(env); await env.DB.prepare(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES('platform_version','production',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value='production',updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(admin.user_id).run(); await adminLog(env,admin.user_id,'system.schema_upgrade',{version:'production',completed:upgrade.completed}); await ensureV13Schema(env); await ensureVPlusSchema(env); return ok({version:'production',message:'Nền tảng đã được kiểm tra và cập nhật an toàn.',completed:upgrade.completed});
   }
 
   if(path==='/api/admin/system/diagnostics' && method==='GET'){
@@ -1196,14 +1233,14 @@ async function routeApi(request, env, ctx, url) {
     const add=(name,ok,detail='')=>checks.push({name,ok:!!ok,detail});
     try{const r=await env.DB.prepare(`SELECT COUNT(*) n FROM users`).first();add('D1 / users',true,`${r?.n||0} tài khoản`)}catch(e){add('D1 / users',false,e.message)}
     try{const r=await env.DB.prepare(`SELECT COUNT(*) n FROM system_settings`).first();add('Cấu hình hệ thống',true,`${r?.n||0} thiết lập`)}catch(e){add('Cấu hình hệ thống',false,e.message)}
-    try{await env.DB.prepare(`SELECT 1 FROM live_access_tokens LIMIT 1`).first();add('Live access V10',true,'Bảng token phòng học sẵn sàng')}catch(e){add('Live access V10',false,e.message)}
-    try{await env.DB.prepare(`SELECT 1 FROM class_messages LIMIT 1`).first();add('Class chat V10',true,'Bảng trò chuyện sẵn sàng')}catch(e){add('Class chat V10',false,e.message)}
+    try{await env.DB.prepare(`SELECT 1 FROM live_access_tokens LIMIT 1`).first();add('Live access',true,'Bảng token phòng học sẵn sàng')}catch(e){add('Live access',false,e.message)}
+    try{await env.DB.prepare(`SELECT 1 FROM class_messages LIMIT 1`).first();add('Class chat',true,'Bảng trò chuyện sẵn sàng')}catch(e){add('Class chat',false,e.message)}
     add('R2 FILES',!!env.FILES,env.FILES?'Binding FILES đã có':'Thiếu binding FILES');
     add('Durable Object LIVE_ROOM',!!env.LIVE_ROOM,env.LIVE_ROOM?'Binding LIVE_ROOM đã có':'Thiếu binding LIVE_ROOM');
     {const sf=realtimeSfuConfig(env);add('Realtime SFU / skyfirsthoc',sf.configured,sf.configured?`Đã cấu hình ${sf.appName}`:'Thiếu REALTIME_APP_ID hoặc REALTIME_APP_SECRET');}
     {const mc=mailConfig(env);add('Dịch vụ email',!!mc.key,mc.key?`Đã cấu hình gửi từ ${mc.from}`:'Chưa cấu hình khóa gửi email');}
     add('Setup token',!!env.SETUP_TOKEN,env.SETUP_TOKEN?'SETUP_TOKEN đã cấu hình':'Nên cấu hình SETUP_TOKEN để bảo vệ khởi tạo');
-    const failed=checks.filter(x=>!x.ok).length; return ok({version:'VPLUS',status:failed?'attention':'healthy',failed,checks,time:nowIso()});
+    const failed=checks.filter(x=>!x.ok).length; return ok({version:'production',status:failed?'attention':'healthy',failed,checks,time:nowIso()});
   }
 
   if(path==='/api/admin/system/test-email' && method==='POST'){
@@ -1230,7 +1267,7 @@ async function routeApi(request, env, ctx, url) {
   }
 
 
-  // V39 Operations Center: custom IAM roles, organization-scoped automation and analytics.
+  // Operations Center: custom IAM roles, organization-scoped automation and analytics.
   if(path==='/api/admin/v39/overview' && method==='GET'){
     const admin=await requireRole(request,env,['super_admin','school_admin']); const org=await requireOrganizationContext(request,env,admin);
     const q=async(sql,...args)=>{try{return await env.DB.prepare(sql).bind(...args).first()}catch{return {n:0}}};
@@ -1323,13 +1360,14 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env);
     let rows=(await env.DB.prepare(`SELECT o.id,o.name,o.slug,o.status,o.plan,om.role FROM organizations o JOIN organization_members om ON om.organization_id=o.id WHERE om.user_id=? AND om.status='active' AND o.status='active' ORDER BY o.name`).bind(u.user_id).all().catch(()=>({results:[]}))).results||[];
     if(!rows.length)rows=[{id:'sky-first',name:'Sky First Network',slug:'sky-first',status:'active',plan:'community',role:u.role==='super_admin'?'owner':'member'}];
+    rows=rows.filter(Boolean).map(o=>({id:str(o.id)||'sky-first',name:str(o.name)||'Sky First Network',slug:str(o.slug)||'sky-first',status:str(o.status)||'active',plan:str(o.plan)||'community',role:str(o.role)||'member'}));
     return ok({organizations:rows});
   }
   if(path==='/api/notifications' && method==='GET'){
-    const u=await requireUser(request,env);const rows=await env.DB.prepare(`SELECT * FROM notification_center WHERE user_id=? OR user_id IS NULL ORDER BY created_at DESC LIMIT 80`).bind(u.user_id).all();return ok({notifications:rows.results||[]});
+    const u=await requireUser(request,env);const rows=await env.DB.prepare(`SELECT * FROM notification_center WHERE user_id=? OR user_id IS NULL ORDER BY created_at DESC LIMIT 80`).bind(u.user_id).all().catch(error=>{console.error('[notifications]',error);return {results:[]}});return ok({notifications:Array.isArray(rows.results)?rows.results:[]});
   }
   if(path==='/api/notifications/read-all' && method==='POST'){
-    const u=await requireUser(request,env);await env.DB.prepare(`UPDATE notification_center SET is_read=1 WHERE user_id=?`).bind(u.user_id).run();return ok();
+    const u=await requireUser(request,env);await env.DB.prepare(`UPDATE notification_center SET is_read=1 WHERE user_id=?`).bind(u.user_id).run().catch(error=>console.error('[notifications read-all]',error));return ok();
   }
   if(path==='/api/calendar' && method==='GET'){
     const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u);const rows=await env.DB.prepare(`SELECT ce.* FROM calendar_events ce WHERE ce.organization_id=? ORDER BY ce.starts_at LIMIT 200`).bind(org).all().catch(()=>({results:[]}));return ok({events:rows.results||[],organization_id:org});
@@ -1404,6 +1442,11 @@ export async function handleApiRequest(request, env, ctx) {
     if (url.pathname === '/api/health' || url.pathname.startsWith('/api/setup/')) {
       return secureResponse(await routeApi(request,env,ctx,url),requestId);
     }
+
+    // A production deployment can be pointed at a database created by an older
+    // release. Reconcile the canonical schema before session/auth queries so a
+    // stale database cannot turn every authenticated route into a generic 500.
+    await ensureRuntimeSchema(env);
 
     const session=await getSession(request,env);
     if(session && !url.pathname.startsWith('/api/exam-attempts/') && !['/api/auth/me','/api/auth/logout'].includes(url.pathname)){

@@ -1,30 +1,35 @@
-# SLCS V40 Production Final
+# SLCS Production Release
 
-Bản này được đóng từ V39 sau vòng hardening cuối, không cắt giảm capability của Learning Core, Assessment Center, Live Classroom, Website Studio, IAM/Organization/Automation/Analytics hay Control Center.
+Đây là bản production hợp nhất. Tên release bên ngoài không mang số phiên bản; các tên migration lịch sử vẫn được giữ để tương thích database.
 
-## Các sửa lỗi/hardening cuối
-- Giữ `safeHttpUrl()` ở runtime chính và kiểm tra whitelist `http/https`.
-- Sửa lỗi runtime Control Center do API collection có thể thiếu trường mảng; các danh sách quan trọng được normalize trước `map/slice/filter`.
-- `admin-operations` dùng đúng Admin UI area.
-- Cache-bust asset V40.
-- Thêm Origin guard cho request thay đổi dữ liệu từ trình duyệt.
-- Bổ sung HSTS cho static và API response.
-- PBKDF2 mới dùng 210.000 vòng; tài khoản dùng hash cũ vẫn đăng nhập được và được nâng cấp sau đăng nhập thành công.
-- Mã lớp và mật khẩu tạm dùng `crypto.getRandomValues()`.
-- Log debug media bị tắt mặc định, chỉ bật khi `globalThis.__SLC_DEBUG__ === true`.
-- Email hệ thống đổi về bảng màu Sky First xanh/trắng.
-- Xóa asset/template tĩnh không được runtime sử dụng để giảm gói production.
-- AI/assistant public/API không được tái đưa vào.
+## Phạm vi chức năng
 
-## Release gate đã chạy trong môi trường build
-- Toàn chuỗi validator VPLUS -> P0/P1/P2 -> V33 -> V39 -> V40: PASS.
-- V40 Production gate: 16/16 PASS.
-- 22 migration chạy tuần tự trên SQLite sạch: PASS.
-- Headless Chromium smoke với API mock: public routes, authenticated shell, Control Center, Organization, Operations, Class tabs, School Studio, Assessment shell thường/nghiêm ngặt: không có page error.
-- Desktop 1440px và mobile 390px smoke: không phát hiện horizontal overflow; logo/header không phình vượt layout.
-- ZIP integrity phải được kiểm tra lại sau khi đóng gói.
+- Public site, login, account request/activation và chính sách.
+- Dashboard theo tài khoản, lớp học và thành viên.
+- Learning Core: học liệu, bài tập, nộp bài, chấm điểm, sổ điểm, điểm danh, tiến độ.
+- Assessment Center đa mục đích: thi, kiểm tra, đánh giá, sát hạch, tuyển chọn, cuộc thi, khảo sát và cấu hình tùy chỉnh.
+- Live Classroom: prejoin, mic/camera, chọn thiết bị, screen share, realtime/SFU fallback và recovery.
+- Website Studio: chỉnh nội dung/branding, draft, preview, publish và revision history.
+- IAM, organization, automation, analytics và Operations Center.
 
-## Trước khi deploy Cloudflare
-Thiết lập secret ở môi trường Cloudflare, không ghi vào source: `SETUP_TOKEN`, `RESEND_API_KEY`, `REALTIME_APP_ID`, `REALTIME_APP_SECRET` (các secret realtime cần khi dùng SFU). Sau đó chạy migration remote và deploy Pages.
+## Hardening chính
 
-Các smoke test ở trên kiểm tra source/render trong build environment; chúng không thay thế test hạ tầng Cloudflare/D1/R2/Realtime thật sau deploy.
+- Chuẩn hóa dữ liệu tài khoản và API boundary để chịu được `null`, object/array thiếu field và dữ liệu cũ.
+- Authenticated shell không phụ thuộc vào `full_name` luôn là chuỗi.
+- Các API phụ ở lớp/Assessment/Admin/Support được cô lập lỗi; một component lỗi không được làm sập toàn bộ ứng dụng.
+- Runtime kiểm tra/repair schema trước các API xác thực để giảm lỗi do database production cũ hoặc chưa đủ migration.
+- Assessment không gửi đáp án đúng xuống client trước khi nộp.
+- Strict exam gửi sự kiện rời trang bằng request `keepalive`.
+- PBKDF2 hiện dùng 10.000 vòng theo yêu cầu của dự án.
+- Camera/microphone/display capture được khai báo trong Permissions Policy.
+- Không có runtime AI; migration DROP legacy AI tables được giữ để dọn dữ liệu cũ an toàn.
+
+## Release gate
+
+Cổng chính:
+
+```bash
+npm run validate:production
+```
+
+Ngoài cổng tĩnh, trước khi đóng gói production cần chạy audit API/schema/SQL/browser/media/realtime trong bộ kiểm thử phát triển. Sau khi deploy vẫn phải smoke test domain Cloudflare và thiết bị mic/camera thật vì môi trường local không thể chứng minh binding/D1/R2/SFU/permission của production bên ngoài.

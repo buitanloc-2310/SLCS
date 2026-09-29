@@ -1,0 +1,57 @@
+import fs from 'fs';
+import path from 'path';
+
+const read=(p)=>fs.readFileSync(p,'utf8');
+const app=read('public/app.js');
+const idx=read('public/index.html');
+const api=read('src/index.js');
+const media=read('public/classroom/media-client.js');
+const classroom=read('public/classroom/classroom-plus.js');
+const schema=read('src/schema-v11.js');
+const pkg=JSON.parse(read('package.json'));
+const migrations=fs.readdirSync('migrations').filter(x=>/^\d+.*\.sql$/.test(x)).sort();
+const sourceRuntime=[app,api,media,classroom,read('src/live-room.js'),read('src/realtime-sfu.js'),read('src/vplus-platform.js')].join('\n');
+const build=(idx.match(/app\.js\?build=([^"']+)/)||[])[1]||'';
+
+const checks=[];
+const check=(name,ok)=>checks.push([name,!!ok]);
+check('neutral production package version',pkg.version==='1.0.0');
+check('single neutral production validator',pkg.scripts?.['validate:production']==='npm run check && node scripts/validate-production.mjs');
+check('PBKDF2 set to 10000',api.includes('const PASSWORD_KDF_ITERATIONS=10000;')&&!api.includes('PASSWORD_KDF_ITERATIONS=210000'));
+check('safeHttpUrl exists before footer',app.indexOf('function safeHttpUrl')>=0&&app.indexOf('function safeHttpUrl')<app.indexOf('function footer'));
+check('authenticated user normalization',app.includes('function normalizeUser')&&app.includes('function userShortName')&&!app.includes('state.user.full_name.split'));
+check('array boundary drops null entries',app.includes('Array.isArray(v)?v.filter(x=>x!==null&&x!==undefined):[]'));
+check('auth profile backend normalizes nullable fields',api.includes("COALESCE(u.full_name,'') full_name")&&api.includes("COALESCE(u.role,'student') role"));
+check('runtime schema reconciled before session',api.indexOf('await ensureRuntimeSchema(env);')>0&&api.indexOf('await ensureRuntimeSchema(env);')<api.indexOf('const session=await getSession(request,env);'));
+check('runtime schema verifies key modern tables',api.includes('productionSchemaLooksReady')&&api.includes('website_revisions LIMIT 0')&&api.includes('automation_rules LIMIT 0'));
+check('production schema marker',api.includes("marker?.value!=='production'")||api.includes("marker?.value==='production'"));
+check('class optional data isolated',app.includes('Promise.allSettled')&&app.includes('classLoadErrors')&&app.includes("[class tab]"));
+check('assessment center degrades without shell crash',app.includes("[exam-center]")&&app.includes("let j={exams:[]},loadError=''") );
+check('admin critical reads degrade',app.includes("[admin stats]")&&app.includes("[admin users]"));
+check('support read degrades',app.includes("[support]")&&app.includes("return {tickets:[],load_error"));
+check('exam answers redacted server side',api.includes('publicExamQuestions')&&api.includes('delete')===false ? api.includes('const {answer,...safe}=') : api.includes('const {answer,...safe}='));
+check('strict exam pagehide keepalive',app.includes("addEventListener('pagehide'")&&app.includes('keepalive:true')&&app.includes('/violation'));
+check('assessment multi-purpose profiles',app.includes('volunteer_evaluation')&&app.includes('competition')&&app.includes('survey'));
+check('learning core present',api.includes('gradebook_categories')&&api.includes('learning-summary')&&api.includes('/attendance'));
+check('website studio revisions present',api.includes('/api/admin/website/revisions')&&app.includes('editorDraftState'));
+check('operations/IAM present',api.includes('/api/admin/v39/roles')&&api.includes('/api/admin/v39/automations')&&api.includes('/api/admin/v39/analytics'));
+check('mic/camera browser APIs present',sourceRuntime.includes('getUserMedia')&&sourceRuntime.includes('enumerateDevices')&&sourceRuntime.includes('devicechange'));
+check('media recovery present',media.includes('recoverIce')&&media.includes('replaceTrack'));
+check('camera/mic permissions header present',api.includes("permissions-policy':'camera=(self), microphone=(self), display-capture=(self)"));
+check('footer labels hide raw URLs',app.includes("link('ctt','Cổng thông tin'")&&app.includes("link('zalo','Zalo / Hotline'")&&app.includes('>${esc(text)}</a>'));
+check('runtime AI endpoints absent',!sourceRuntime.includes('/api/ai')&&!sourceRuntime.toLowerCase().includes('sky first ai')&&!sourceRuntime.includes('OPENAI_API_KEY')&&!sourceRuntime.includes('AI_API_KEY'));
+check('legacy AI storage only appears as DROP migration',!app.match(/ai_(messages|conversations|audit|action_requests|rate_limits)/)&&!api.match(/ai_(messages|conversations|audit|action_requests|rate_limits)/));
+check('asset build token is neutral',!!build&&!/40\.0|v40/i.test(build));
+check('index assets share build token',build&&['styles.css','auth-shell.css','design-system.css'].every(f=>idx.includes(`${f}?build=${build}`)));
+check('app lazy assets share build token',build&&['ui-system.js','classroom/classroom-plus.js','classroom/media-client.js','classroom/beauty-engine.js','vendor/slc-qrcode.js'].every(f=>app.includes(`${f}?build=${build}`)));
+check('no stale numbered cache in public entry',!idx.includes('40.0.1')&&!app.includes('40.0.1'));
+check('22 canonical migrations',migrations.length===22);
+check('installer embeds every canonical migration',migrations.every(f=>schema.includes(path.basename(f,'.sql'))));
+check('no backup source files',!function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isDirectory()){if(walk(p))return true}else if(/\.bak(?:-|$)|\.orig$|~$/.test(e.name))return true}return false}('.'));
+check('functions API delegates to canonical backend',read('functions/api/[[path]].js').includes("from '../../src/index.js'"));
+check('no eval/new Function in runtime',!sourceRuntime.match(/\beval\s*\(|new\s+Function\s*\(/));
+
+let failed=0;
+for(const [name,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${name}`);if(!ok)failed++}
+console.log(`PRODUCTION VALIDATION: ${checks.length-failed}/${checks.length} PASS`);
+if(failed)process.exit(1);

@@ -1,9 +1,6 @@
--- SLC D1
--- Khuyến nghị: để Wrangler chạy migrations bằng `npm run db:migrate`.
--- Nếu chạy thủ công trong Cloudflare D1 Console, chạy lần lượt:
---   migrations/0001_initial.sql
---   migrations/0002_learning_plus.sql
---   migrations/0003_public_account_email.sql
---
--- Giới hạn giai đoạn khởi tạo tối đa 10.000 tài khoản được cưỡng chế ở D1 và API.
--- Không hiển thị giới hạn này trên giao diện public.
+-- SLCS / Cloudflare D1
+-- Đường triển khai chuẩn: npm run db:migrate
+-- Không copy riêng vài migration đầu vào D1 Console vì schema production gồm toàn bộ lịch sử trong /migrations.
+-- Nếu cần điều tra database, kiểm tra schema_version và các bảng/cột đại diện trước khi can thiệp thủ công.
+-- Runtime có cơ chế repair schema cũ/thiếu, nhưng migration qua Wrangler vẫn là cách triển khai chính.
+-- Giới hạn khởi tạo tối đa 10.000 tài khoản (nếu được cấu hình trong schema/API) là giới hạn vận hành, không phải PBKDF2.

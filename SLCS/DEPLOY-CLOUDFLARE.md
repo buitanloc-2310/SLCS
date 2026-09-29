@@ -1,34 +1,46 @@
-# Deploy Cloudflare — SLCS V40 Production
+# Triển khai Cloudflare — SLCS Production
 
-## Project root
-Sau khi giải nén, dùng thư mục trong cùng `SLCS/SLCS` làm root.
+## 1. Kiểm tra source
 
-## Cloudflare Pages
-- Framework preset: **None**
-- Build command: `npm install && npm run validate:production`
-- Build output directory: `public`
+```bash
+npm run validate:production
+```
 
-Thư mục `/functions` được Cloudflare Pages deploy cùng site và route `/api/*` đã được khai báo trong `public/_routes.json`.
+Không deploy nếu cổng kiểm tra thất bại.
 
-## Bindings hiện có trong `wrangler.json`
-- D1: `DB` -> `skyfirsthoctap`
-- R2: `FILES` -> `skyfirsthoctap`
+## 2. Kiểm tra binding
 
-## Secrets / variables cần cấu hình
-Không ghi secret vào source hoặc commit Git.
-- `SETUP_TOKEN` — bắt buộc cho khởi tạo/cài schema lần đầu.
-- `RESEND_API_KEY` — cần nếu dùng gửi email.
-- `REALTIME_APP_ID` và `REALTIME_APP_SECRET` — cần khi bật Cloudflare Realtime SFU.
-- `BEAUTY_OWNER_USER_ID` — tùy chọn nếu dùng entitlement Beauty riêng.
+Đảm bảo `wrangler.json` trỏ đúng Pages project, D1 database, R2/Realtime và các secret cần thiết cho môi trường thật. Không đưa secret vào repository hoặc file public.
 
-Các biến không nhạy cảm như `APP_URL`, `SUPPORT_EMAIL`, `APP_NAME`, `MAIL_FROM`, `REALTIME_API_BASE`, `REALTIME_APP_NAME` đã có cấu hình mặc định trong `wrangler.json`.
+## 3. Migration D1
 
-## Thứ tự production
-1. `npm install`
-2. `npm run validate:production`
-3. Cấu hình bindings/secrets trên Cloudflare.
-4. `npm run db:migrate`
-5. `npm run deploy`
-6. Kiểm tra `/api/health`, `/api/setup/status`, đăng nhập, Dashboard, lớp học, Assessment, Control Center và một phiên Live Classroom thật.
+```bash
+npm run db:migrate
+```
 
-Không chạy migration lại bằng cách xóa/đổi tên migration cũ. Lịch sử migration hiện tại được giữ để tương thích D1.
+Runtime cũng có cơ chế phát hiện schema cũ/thiếu và repair bằng bộ migration hợp nhất, nhưng migration chủ động trước deploy vẫn là đường triển khai chuẩn.
+
+## 4. Deploy Pages
+
+```bash
+npm run deploy
+```
+
+Hoặc chạy toàn bộ chuỗi:
+
+```bash
+npm run deploy:production
+```
+
+## 5. Smoke test sau deploy
+
+Kiểm tra ít nhất các luồng sau trên domain thật:
+
+1. Public Home → Login.
+2. Login → Dashboard → Classes → một Class Detail.
+3. Tất cả tab lớp: Bảng tin, Học liệu, Bài tập, Đánh giá, Sổ điểm, Điểm danh, Tiến độ, Chat, Lịch, Thành viên.
+4. Assessment Center: mở bài, autosave, nộp; strict mode nếu áp dụng.
+5. Live Classroom trên ít nhất hai thiết bị: cấp quyền mic/camera, đổi thiết bị, mute/unmute, bật/tắt camera, chia sẻ màn hình, rời/vào lại phòng.
+6. Admin, Website Studio, Operations Center và quyền theo role.
+
+Nếu một API phụ thất bại, UI phải cô lập lỗi ở component tương ứng thay vì làm sập toàn bộ authenticated shell.

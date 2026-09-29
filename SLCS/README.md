@@ -1,46 +1,40 @@
-# Trung tâm Học tập Số Sky First Network — V40 Production
+# Trung tâm Học tập Số Sky First Network (SLCS)
 
-SLCS V40 là bản production hợp nhất của hệ thống học tập số Sky First Network.
+SLCS là nền tảng học tập số hợp nhất của Sky First Network, gồm website công khai, tài khoản, lớp học, Live Classroom, học liệu, bài tập, sổ điểm, điểm danh, tiến độ, Assessment Center, Website Studio, quản trị và vận hành tổ chức.
 
-Các khối chính hiện có:
-- Public website, SFN Account, yêu cầu/kích hoạt tài khoản.
-- Dashboard, lớp học, học liệu, lịch, thông báo, hỗ trợ.
-- Assignment, Gradebook, Progress, Attendance.
-- Live Classroom và Cloudflare Realtime SFU/fallback signaling.
-- Sky First Assessment Center cho thi, kiểm tra, đánh giá TNV, sát hạch, tuyển chọn, cuộc thi, khảo sát và loại tùy chỉnh.
-- Website Studio, Control Center, Organization, IAM, Automation, Analytics.
-- D1 cho dữ liệu, R2 cho file, Cloudflare Pages Functions cho API.
+## Cấu trúc chính
 
-## Cấu trúc archive
+- `public/`: giao diện web và các module trình duyệt.
+- `src/`: API, xác thực, lớp học, đánh giá, realtime và logic nền tảng.
+- `functions/`: Cloudflare Pages Functions, chuyển tiếp vào API chuẩn trong `src/`.
+- `migrations/`: lịch sử migration D1. Không đổi tên hoặc xóa migration đã phát hành.
+- `scripts/validate-production.mjs`: cổng kiểm tra production hợp nhất.
 
-```text
-SLCS/
-└── SLCS/
-    ├── public/
-    ├── src/
-    ├── functions/
-    ├── migrations/
-    ├── scripts/
-    ├── package.json
-    └── wrangler.json
-```
-
-Khi deploy, dùng thư mục `SLCS/SLCS` làm project root.
-
-## Kiểm tra production
+## Kiểm tra trước khi triển khai
 
 ```bash
-npm install
 npm run validate:production
 ```
 
-## Migration và deploy
+Lệnh trên chạy kiểm tra cú pháp và release gate hợp nhất. Khi triển khai Cloudflare, tiếp tục áp dụng migration D1 trước khi deploy mã mới:
 
 ```bash
-npm run db:migrate
-npm run deploy
+npm run deploy:production
 ```
 
-Trước deploy phải cấu hình secret Cloudflare phù hợp, tối thiểu `SETUP_TOKEN`; email cần `RESEND_API_KEY`; Cloudflare Realtime SFU cần `REALTIME_APP_ID` và `REALTIME_APP_SECRET`.
+`deploy:production` thực hiện: validate → D1 migrations → Pages deploy.
 
-Xem `PRODUCTION-RELEASE-V40.md` và `DEPLOY-CLOUDFLARE.md`.
+## Bảo mật tài khoản
+
+Mật khẩu được băm bằng PBKDF2. Cấu hình hiện tại của hệ thống dùng 10.000 vòng theo yêu cầu vận hành của dự án. Không lưu mật khẩu thô.
+
+## Dữ liệu và tương thích
+
+Runtime có bước kiểm tra schema trước các API xác thực. Nếu database cũ/thiếu schema, installer hợp nhất sẽ bổ sung các migration còn thiếu trước khi tiếp tục request. Các migration lịch sử vẫn được giữ nguyên để tương thích D1 hiện có.
+
+## Tài liệu
+
+- `DEPLOY-CLOUDFLARE.md`: triển khai Cloudflare.
+- `PRODUCTION-RELEASE.md`: checklist và phạm vi kiểm thử production.
+- `docs/ARCHITECTURE.md`: kiến trúc hệ thống.
+- `docs/D1-RUN.sql`: ghi chú D1 hỗ trợ vận hành.

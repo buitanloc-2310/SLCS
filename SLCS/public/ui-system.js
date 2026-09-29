@@ -1,4 +1,4 @@
-/** V35 shared UI runtime. No business/API logic lives here. */
+/** Shared UI runtime. No business/API logic lives here. */
 const ROUTE_GROUPS={
   home:'home',classes:'learning','exam-center':'assessment',calendar:'learning',resources:'learning',notifications:'account',support:'support',account:'account',admin:'admin','admin-organizations':'admin','admin-operations':'admin',login:'public',request:'public',lookup:'public',privacy:'public',security:'public',terms:'public'
 };

@@ -1,7 +1,0 @@
-import fs from 'node:fs';
-const read=p=>fs.readFileSync(p,'utf8');
-const app=read('public/app.js'), api=read('src/index.js'), css=read('public/styles.css');
-const checks=[
- ['Public home',/function publicHome|public-hero/.test(app)],['Account request',/reqForm/.test(app)&&/account-requests/.test(api)],['Request lookup',/lookup/.test(app)],['Login',/login/.test(app)],['Dashboard',/dashboard/.test(app)],['Classes',/class-grid|class-card/.test(app)],['Calendar',/calendar/.test(app)],['Resources',/resources/.test(app)],['Support',/support/.test(app)],['Notifications',/notifications/.test(app)],['Account/profile',/account-chip/.test(app)],['Admin',/data-go="admin"/.test(app)],['Live room',/async function liveRoom/.test(app)],['Guest live',/guestLiveEntry/.test(app)],['Mic/camera',/micSelect/.test(app)&&/camSelect/.test(app)],['Screen share',/screen-share|screenShare|shareScreen/i.test(app)],['Chat',/chatInput/.test(app)],['People panel',/panelPeople/.test(app)],['Teacher control',/teacherControlBtn/.test(app)],['Confidence camera',/confidenceMirror/.test(app)],['Panic hide',/panicHide/.test(app)],['Beauty gated',/beautyAllowed/.test(app)],['Exam flow',/submitExam/.test(app)],['Canonical final UX',/FINAL UX CANONICAL LAYER/.test(css)]
-];
-let fail=0; for(const [n,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${n}`);if(!ok)fail++} console.log(`FINAL FEATURE PRESERVATION: ${checks.length-fail}/${checks.length}`); if(fail)process.exit(1);

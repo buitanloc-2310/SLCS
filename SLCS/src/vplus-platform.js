@@ -7,12 +7,12 @@ export const VPLUS = Object.freeze({
 });
 
 export const ROLE_PERMISSIONS = Object.freeze({
-  student: ['ai.ask','ai.research','ai.create','class.join','class.chat','class.react'],
+  student: ['class.join','class.chat','class.react'],
   guest: ['class.join','class.chat','class.react'],
-  assistant: ['ai.ask','ai.research','ai.create','ai.analyze.class','ai.act.class','class.manage'],
-  teacher: ['ai.ask','ai.research','ai.create','ai.analyze.class','ai.act.class','class.manage'],
-  account_admin: ['ai.ask','ai.research','ai.create','accounts.manage'],
-  school_admin: ['ai.ask','ai.research','ai.create','ai.analyze.school','school.manage'],
+  assistant: ['class.manage'],
+  teacher: ['class.manage'],
+  account_admin: ['accounts.manage'],
+  school_admin: ['school.manage'],
   super_admin: ['*']
 });
 
@@ -57,56 +57,6 @@ export async function ensureVPlusSchema(env){
     )`,
     `CREATE INDEX IF NOT EXISTS idx_platform_events_class_time ON platform_events(class_id,created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_platform_events_type_time ON platform_events(event_type,created_at DESC)`,
-    `CREATE TABLE IF NOT EXISTS ai_conversations (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      class_id TEXT,
-      mode TEXT NOT NULL DEFAULT 'ask',
-      title TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_ai_conversations_user ON ai_conversations(user_id,updated_at DESC)`,
-    `CREATE TABLE IF NOT EXISTS ai_messages (
-      id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      citations_json TEXT NOT NULL DEFAULT '[]',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation ON ai_messages(conversation_id,created_at)`,
-    `CREATE TABLE IF NOT EXISTS ai_audit (
-      id TEXT PRIMARY KEY,
-      user_id TEXT,
-      class_id TEXT,
-      mode TEXT NOT NULL DEFAULT 'ask',
-      action TEXT NOT NULL DEFAULT 'chat',
-      status TEXT NOT NULL DEFAULT 'ok',
-      detail_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_ai_audit_time ON ai_audit(created_at DESC)`,
-    `CREATE TABLE IF NOT EXISTS ai_action_requests (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      class_id TEXT,
-      action_key TEXT NOT NULL,
-      payload_json TEXT NOT NULL DEFAULT '{}',
-      risk_level TEXT NOT NULL DEFAULT 'normal',
-      status TEXT NOT NULL DEFAULT 'pending',
-      expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      confirmed_at TEXT
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_ai_action_requests_user ON ai_action_requests(user_id,status,created_at DESC)`,
-    `CREATE TABLE IF NOT EXISTS ai_rate_limits (
-      user_id TEXT NOT NULL,
-      bucket TEXT NOT NULL,
-      count INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY(user_id,bucket)
-    )`,
     `CREATE TABLE IF NOT EXISTS organizations (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

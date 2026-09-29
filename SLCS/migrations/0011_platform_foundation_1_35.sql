@@ -46,4 +46,4 @@ CREATE TABLE IF NOT EXISTS profile_visibility (
 );
 INSERT OR IGNORE INTO organizations(id,name,slug,status,plan) VALUES('sky-first','Sky First Network','sky-first','active','community');
 INSERT OR IGNORE INTO organization_entitlements(organization_id,capability,enabled,source) VALUES
-('sky-first','live.use',1,'internal'),('sky-first','guest.access',1,'internal'),('sky-first','teaching.core',1,'internal'),('sky-first','ai.use',1,'internal');
+('sky-first','live.use',1,'internal'),('sky-first','guest.access',1,'internal'),('sky-first','teaching.core',1,'internal');

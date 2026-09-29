@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "slc",
+  "pages_build_output_dir": "./public",
+  "compatibility_date": "2026-09-14",
+  "vars": {
+    "APP_URL": "https://slc.skyfirst.io.vn",
+    "SUPPORT_EMAIL": "support@skyfirst.io.vn",
+    "APP_NAME": "Trung tâm Học tập Số Sky First Network",
+    "SESSION_DAYS": "30",
+    "MAIL_FROM": "Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>",
+    "REALTIME_APP_NAME": "skyfirsthoc",
+    "REALTIME_API_BASE": "https://rtc.live.cloudflare.com/v1"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "skyfirsthoctap",
+      "database_id": "6fd6a6c3-aae6-4b11-89e0-8e13a0e27d3c"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "skyfirsthoctap"
+    }
+  ]
+}

@@ -700,7 +700,7 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env); const b=await request.json(); const a=await env.DB.prepare(`SELECT a.*,e.question_json,e.duration_minutes,e.show_score FROM exam_attempts a JOIN exams e ON e.id=a.exam_id WHERE a.id=? AND a.user_id=? AND a.status='in_progress'`).bind(submitExam[1],u.user_id).first(); if(!a)return bad('Phiên thi không còn hoạt động.',409);
     const deadline=new Date(a.started_at).getTime()+Number(a.duration_minutes||30)*60000; if(Date.now()>deadline+120000){await env.DB.prepare(`UPDATE exam_attempts SET status='expired',submitted_at=COALESCE(submitted_at,CURRENT_TIMESTAMP),last_saved_at=COALESCE(last_saved_at,CURRENT_TIMESTAMP) WHERE id=? AND status='in_progress'`).bind(a.id).run();return bad('Phiên thi đã quá thời gian nộp bài.',409,{status:'expired'});}
     const qs=JSON.parse(a.question_json||'[]'), ans=b.answers||{}; let score=0,max=0;
-    for(const q of qs){ const pts=Number(q.points||1); max+=pts; if(q.type==='mcq' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='truefalse' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='fill' && String(ans[q.id]??'').trim().toLocaleLowerCase('vi-VN')===String(q.answer??'').trim().toLocaleLowerCase('vi-VN')) score+=pts; }
+    for(const q of qs){ const pts=Number(q.points||1); max+=pts; if(q.type==='mcq' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='truefalse' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='fill' && String(ans[q.id]??'').trim().toLocaleLowerCase('vi-VN')===String(q.answer??'').trim().toLocaleLowerCase('vi-VN')) score+=pts; if(q.type==='multi'){let expected=[];try{expected=JSON.parse(q.answer||'[]')}catch{}const actual=Array.isArray(ans[q.id])?ans[q.id]:[];if(JSON.stringify([...actual].sort())===JSON.stringify([...expected].sort()))score+=pts;} }
     await env.DB.prepare(`UPDATE exam_attempts SET answers_json=?,event_log_json=?,score=?,max_score=?,status='submitted',submitted_at=CURRENT_TIMESTAMP WHERE id=?`).bind(JSON.stringify(ans),JSON.stringify(b.events||[]),score,max,a.id).run(); return ok({score,max_score:max,show_score:a.show_score!==0});
   }
 
@@ -1376,6 +1376,40 @@ async function routeApi(request, env, ctx, url) {
     const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u),hasOrg=await tableHasColumn(env,'classes','organization_id');const base=`SELECT m.id,m.class_id,m.title,m.created_at,f.id file_id,f.name,f.mime,f.size,c.name class_name FROM materials m JOIN files f ON f.id=m.file_id JOIN classes c ON c.id=m.class_id JOIN class_members cm ON cm.class_id=m.class_id WHERE cm.user_id=? AND cm.status='active' AND c.status!='deleted'`;const rows=hasOrg?await env.DB.prepare(`${base} AND COALESCE(c.organization_id,'sky-first')=? ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id,org).all():await env.DB.prepare(`${base} ORDER BY m.created_at DESC LIMIT 100`).bind(u.user_id).all();return ok({resources:rows.results||[],organization_id:hasOrg?org:'sky-first'});
   }
 
+  // Learning Operations: actionable calendar, global search, certificates and command center.
+  if(path==='/api/calendar' && method==='POST'){
+    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u);const b=await request.json();
+    if(!['super_admin','school_admin','teacher'].includes(u.role))return bad('Không có quyền tạo lịch.',403);
+    const title=str(b.title).slice(0,160),starts=str(b.starts_at);if(!title||!starts)return bad('Cần tên và thời gian bắt đầu.');
+    const id=crypto.randomUUID();await env.DB.prepare(`INSERT INTO calendar_events(id,organization_id,class_id,title,event_type,starts_at,ends_at,status,created_by) VALUES(?,?,?,?,?,?,?,'scheduled',?)`).bind(id,org,str(b.class_id)||null,title,str(b.event_type||'event').slice(0,40),starts,str(b.ends_at)||null,u.user_id).run();
+    return ok({id});
+  }
+  if(path==='/api/search' && method==='GET'){
+    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u),term=str(url.searchParams.get('q')).trim();if(term.length<2)return ok({results:[]});const like=`%${term.slice(0,80)}%`;
+    const [classes,materials,assignments,exams]=await Promise.all([
+      env.DB.prepare(`SELECT c.id,c.name title,'class' type,c.description subtitle FROM classes c JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? AND (c.name LIKE ? OR c.description LIKE ?) LIMIT 12`).bind(u.user_id,org,like,like).all().catch(()=>({results:[]})),
+      env.DB.prepare(`SELECT m.id,m.class_id,m.title,'resource' type,c.name subtitle FROM materials m JOIN classes c ON c.id=m.class_id JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? AND m.title LIKE ? LIMIT 12`).bind(u.user_id,org,like).all().catch(()=>({results:[]})),
+      env.DB.prepare(`SELECT a.id,a.class_id,a.title,'assignment' type,c.name subtitle FROM assignments a JOIN classes c ON c.id=a.class_id JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? AND a.title LIKE ? LIMIT 12`).bind(u.user_id,org,like).all().catch(()=>({results:[]})),
+      env.DB.prepare(`SELECT e.id,e.class_id,e.title,'assessment' type,c.name subtitle FROM exams e JOIN classes c ON c.id=e.class_id JOIN class_members cm ON cm.class_id=c.id WHERE cm.user_id=? AND cm.status='active' AND COALESCE(c.organization_id,'sky-first')=? AND e.title LIKE ? LIMIT 12`).bind(u.user_id,org,like).all().catch(()=>({results:[]}))]);
+    return ok({results:[...(classes.results||[]),...(materials.results||[]),...(assignments.results||[]),...(exams.results||[])]});
+  }
+  if(path==='/api/certificates' && method==='GET'){
+    const u=await requireUser(request,env);const rows=await env.DB.prepare(`SELECT id,title,certificate_code,status,issued_at,class_id FROM certificates WHERE user_id=? ORDER BY issued_at DESC LIMIT 100`).bind(u.user_id).all().catch(()=>({results:[]}));return ok({certificates:rows.results||[]});
+  }
+  if(path==='/api/admin/certificates' && method==='POST'){
+    const u=await requireRole(request,env,['super_admin','school_admin']);const org=await requireOrganizationContext(request,env,u),b=await request.json(),userId=str(b.user_id),title=str(b.title).slice(0,160);if(!userId||!title)return bad('Thiếu người nhận hoặc tên ghi nhận.');
+    const code=`SFCA-${new Date().getUTCFullYear()}-${crypto.randomUUID().replace(/-/g,'').slice(0,10).toUpperCase()}`,id=crypto.randomUUID();await env.DB.prepare(`INSERT INTO certificates(id,organization_id,user_id,class_id,title,certificate_code,payload_json,issued_by) VALUES(?,?,?,?,?,?,?,?)`).bind(id,org,userId,str(b.class_id)||null,title,code,JSON.stringify(b.payload||{}),u.user_id).run();return ok({id,certificate_code:code});
+  }
+  if(path==='/api/command-center' && method==='GET'){
+    const u=await requireUser(request,env),org=await requireOrganizationContext(request,env,u);if(!['super_admin','school_admin','teacher'].includes(u.role))return bad('Không có quyền.',403);
+    const [classes,upcoming,pending,tickets,notices]=await Promise.all([
+      env.DB.prepare(`SELECT COUNT(*) n FROM classes WHERE COALESCE(organization_id,'sky-first')=? AND status!='deleted'`).bind(org).first().catch(()=>({n:0})),
+      env.DB.prepare(`SELECT COUNT(*) n FROM calendar_events WHERE organization_id=? AND datetime(starts_at)>=datetime('now') AND datetime(starts_at)<=datetime('now','+7 days')`).bind(org).first().catch(()=>({n:0})),
+      env.DB.prepare(`SELECT COUNT(*) n FROM submissions s JOIN assignments a ON a.id=s.assignment_id JOIN classes c ON c.id=a.class_id WHERE COALESCE(c.organization_id,'sky-first')=? AND s.status='submitted' AND s.score IS NULL`).bind(org).first().catch(()=>({n:0})),
+      env.DB.prepare(`SELECT COUNT(*) n FROM support_tickets WHERE status NOT IN ('closed','resolved')`).first().catch(()=>({n:0})),
+      env.DB.prepare(`SELECT COUNT(*) n FROM notification_center WHERE is_read=0`).first().catch(()=>({n:0}))]);
+    return ok({classes:Number(classes?.n||0),upcoming:Number(upcoming?.n||0),pending_grading:Number(pending?.n||0),open_tickets:Number(tickets?.n||0),unread_notifications:Number(notices?.n||0)});
+  }
   const fileMatch=path.match(/^\/api\/files\/([^/]+)$/);
   if(fileMatch && method==='GET'){
     const u=await requireUser(request,env); const f=await env.DB.prepare(`SELECT * FROM files WHERE id=?`).bind(fileMatch[1]).first(); if(!f)return bad('Không tìm thấy tệp.',404);

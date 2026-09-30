@@ -11,7 +11,7 @@ const checks=[
  ['monitor control',app.includes('data-admin-monitor')],
  ['public link control',app.includes('data-admin-copy')],
  ['archive delete control',app.includes('data-admin-delete')],
- ['manager no forced start',app.includes('data-manage-center-exam')],
+ ['personal/admin surfaces separated',app.includes('Trung tâm Đánh giá của tôi')&&app.includes('adminCreateAssessment')],
 ];
 let n=0; for(const [name,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${name}`); if(!ok)process.exitCode=1; else n++;}
 console.log(`ASSESSMENT ADMIN CENTER: ${n}/${checks.length} PASS`);

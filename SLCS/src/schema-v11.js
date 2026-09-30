@@ -312,7 +312,7 @@ export const V11_SCHEMA_STAGES = [
     "CREATE INDEX IF NOT EXISTS idx_guest_email ON exam_guest_attempts(email,exam_id);"
 ]
   },
-  ,{
+  {
     "name": "0023_assessment_governance_v42",
     "statements": [
       "ALTER TABLE exams ADD COLUMN version_no INTEGER NOT NULL DEFAULT 1;",

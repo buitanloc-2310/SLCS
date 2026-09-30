@@ -287,7 +287,12 @@ async function productionSchemaLooksReady(env){
     // Verify representative objects from every major generation. A stale marker
     // must not allow session/auth queries to run against an incomplete database.
     await env.DB.prepare(`SELECT organization_id FROM classes LIMIT 0`).all();
-    await env.DB.prepare(`SELECT assessment_type FROM exams LIMIT 0`).all();
+    // Assessment Center V40 fields must be present before we trust the marker.
+    // Older deployments could already have schema_version='production' while
+    // still missing migration 0022, which made Assessment routes fail with a
+    // generic 500 / Request ID instead of reconciling the schema.
+    await env.DB.prepare(`SELECT assessment_type,time_limit_enabled,public_access,public_token,hide_schedule,require_email_verify,shuffle_questions,shuffle_options,updated_at FROM exams LIMIT 0`).all();
+    await env.DB.prepare(`SELECT access_key,full_name,email,candidate_code,class_name,status,answers_json,event_log_json FROM exam_guest_attempts LIMIT 0`).all();
     await env.DB.prepare(`SELECT published FROM assignments LIMIT 0`).all();
     await env.DB.prepare(`SELECT 1 FROM website_revisions LIMIT 0`).all();
     await env.DB.prepare(`SELECT 1 FROM automation_rules LIMIT 0`).all();
@@ -645,8 +650,9 @@ async function routeApi(request, env, ctx, url) {
   if(matsMatch && method==='POST'){
     const u=await requireUser(request,env); const id=matsMatch[1]; const m=await env.DB.prepare(`SELECT role FROM class_members WHERE class_id=? AND user_id=? AND status='active'`).bind(id,u.user_id).first(); if(!m||!['teacher','assistant'].includes(m.role))return bad('Chỉ giáo viên/trợ giảng được tải học liệu.',403);
     const form=await request.formData(); const file=form.get('file'); if(!(file instanceof File)||!file.size)return bad('Chưa chọn tệp.');
-    const materialMimes=['application/pdf','text/plain','text/markdown','text/csv','application/csv','application/json','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-    const uploadErr=validateUpload(file,{maxMb:50,mimes:materialMimes,label:'Học liệu'}); if(uploadErr)return bad(uploadErr,400);
+    // Học liệu accepts every file type. We still enforce a size ceiling and store the
+    // original MIME as metadata; download responses use nosniff/sandbox protections.
+    const uploadErr=validateUpload(file,{maxMb:50,label:'Học liệu'}); if(uploadErr)return bad(uploadErr,400);
     const meta=await uploadR2(file,env,`classes/${id}/materials`,u.user_id,'class');
     const mid=crypto.randomUUID();
     await env.DB.prepare(`INSERT INTO materials(id,class_id,file_id,title,description,created_by,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(mid,id,meta.id,str(form.get('title'))||file.name,str(form.get('description')),u.user_id).run(); return ok({id:mid});

@@ -14,6 +14,15 @@ function bad(message, status = 400, detail = undefined) { return json({ ok: fals
 function ok(data = {}) { return json({ ok: true, ...data }); }
 function secureResponse(r,requestId=''){if(!r||r.status===101)return r;const h=new Headers(r.headers);for(const [k,v] of Object.entries(SECURITY_HEADERS))if(!h.has(k))h.set(k,v);if(requestId)h.set('x-request-id',requestId);return new Response(r.body,{status:r.status,statusText:r.statusText,headers:h});}
 function nowIso() { return new Date().toISOString(); }
+// Backward compatibility: old assessment schedules were saved from datetime-local without a timezone.
+// SLC is operated in Viet Nam, so legacy naive values are interpreted as UTC+07:00. New clients send ISO/Z.
+function examTimeMs(value) {
+  const v=str(value); if(!v) return null;
+  const explicit=/(?:Z|[+-]\d{2}:?\d{2})$/i.test(v);
+  const normalized=explicit?v:v.replace(' ','T')+'+07:00';
+  const ms=Date.parse(normalized); return Number.isFinite(ms)?ms:null;
+}
+
 function publicExamQuestions(raw='[]') {
   let questions=[]; try{questions=Array.isArray(raw)?raw:JSON.parse(raw||'[]')}catch{questions=[]}
   return questions.map(q=>{const {answer,...safe}=q&&typeof q==='object'?q:{};return safe});
@@ -341,13 +350,13 @@ async function routeApi(request, env, ctx, url) {
   if(publicAssessment && method==='GET'){
     const e=await env.DB.prepare(`SELECT id,title,instructions,opens_at,closes_at,hide_schedule,status,center_label FROM exams WHERE public_token=? AND public_access=1 AND status='published'`).bind(publicAssessment[1]).first();
     if(!e)return bad('Liên kết dự thi không tồn tại hoặc đã bị vô hiệu hóa.',404);
-    const now=Date.now(), state=e.opens_at&&now<new Date(e.opens_at).getTime()?'Chưa mở':e.closes_at&&now>new Date(e.closes_at).getTime()?'Đã kết thúc':'Đang mở';
+    const now=Date.now(), openMs=examTimeMs(e.opens_at), closeMs=examTimeMs(e.closes_at), state=openMs&&now<openMs?'Chưa mở':closeMs&&now>closeMs?'Đã kết thúc':'Đang mở';
     return ok({exam:{title:e.title,instructions:e.instructions,center_label:e.center_label,public_status:`Trạng thái: ${state}`,schedule:e.hide_schedule?null:{opens_at:e.opens_at,closes_at:e.closes_at}}});
   }
   const publicStart=path.match(/^\/api\/public\/assessments\/([^/]+)\/start$/);
   if(publicStart && method==='POST'){
     const e=await env.DB.prepare(`SELECT * FROM exams WHERE public_token=? AND public_access=1 AND status='published'`).bind(publicStart[1]).first();if(!e)return bad('Liên kết dự thi không khả dụng.',404);
-    const now=Date.now();if(e.opens_at&&now<new Date(e.opens_at).getTime())return bad('Bài đánh giá hiện chưa mở.',409);if(e.closes_at&&now>new Date(e.closes_at).getTime())return bad('Bài đánh giá đã kết thúc.',409);
+    const now=Date.now(),openMs=examTimeMs(e.opens_at),closeMs=examTimeMs(e.closes_at);if(openMs&&now<openMs)return bad('Bài đánh giá hiện chưa mở.',409);if(closeMs&&now>closeMs)return bad('Bài đánh giá đã kết thúc.',409);
     const b=await request.json(),full=str(b.full_name).slice(0,160),email=str(b.email).trim().toLowerCase().slice(0,220),code=str(b.candidate_code).slice(0,100),className=str(b.class_name).slice(0,160);if(!full||!/^\S+@\S+\.\S+$/.test(email)||!code||!className)return bad('Vui lòng nhập đầy đủ họ tên, email, mã học viên/mã dự thi và lớp/đơn vị.');
     const old=await env.DB.prepare(`SELECT id,access_key FROM exam_guest_attempts WHERE exam_id=? AND email=? AND candidate_code=? AND status='in_progress' ORDER BY started_at DESC LIMIT 1`).bind(e.id,email,code).first();if(old)return ok({attempt_id:old.id,access_key:old.access_key,resumed:true});
     const id=crypto.randomUUID(),key=crypto.randomUUID()+crypto.randomUUID();await env.DB.prepare(`INSERT INTO exam_guest_attempts(id,exam_id,access_key,full_name,email,candidate_code,class_name) VALUES(?,?,?,?,?,?,?)`).bind(id,e.id,key,full,email,code,className).run();
@@ -730,7 +739,7 @@ async function routeApi(request, env, ctx, url) {
 
   const startExam=path.match(/^\/api\/exams\/([^/]+)\/start$/);
   if(startExam && method==='POST'){
-    const u=await requireUser(request,env); const eid=startExam[1]; const e=await env.DB.prepare(`SELECT * FROM exams WHERE id=? AND status='published'`).bind(eid).first(); if(!e)return bad('Không tìm thấy bài kiểm tra.'); await requireClassMember(env,e.class_id,u.user_id); const now=Date.now(); if(e.opens_at&&now<new Date(e.opens_at).getTime())return bad('Kỳ thi chưa mở.',409); if(e.closes_at&&now>new Date(e.closes_at).getTime())return bad('Kỳ thi đã đóng.',409);
+    const u=await requireUser(request,env); const eid=startExam[1]; const e=await env.DB.prepare(`SELECT * FROM exams WHERE id=? AND status='published'`).bind(eid).first(); if(!e)return bad('Không tìm thấy bài kiểm tra.'); await requireClassMember(env,e.class_id,u.user_id); const now=Date.now(),openMs=examTimeMs(e.opens_at),closeMs=examTimeMs(e.closes_at); if(openMs&&now<openMs)return bad('Kỳ thi chưa mở.',409); if(closeMs&&now>closeMs)return bad('Kỳ thi đã đóng.',409);
     const existing=await activeExam(u.user_id,env); if(existing)return bad('Bạn đang có một phiên kiểm tra khác đang hoạt động.',409,existing); const cnt=await env.DB.prepare(`SELECT COUNT(*) n FROM exam_attempts WHERE exam_id=? AND user_id=? AND status IN ('submitted','expired','terminated')`).bind(eid,u.user_id).first(); if(Number(cnt?.n||0)>=Number(e.max_attempts||1))return bad('Bạn đã sử dụng hết số lượt thi.',409);
     const id=crypto.randomUUID(); await env.DB.prepare(`INSERT INTO exam_attempts(id,exam_id,user_id,status,started_at,answers_json,event_log_json) VALUES(?,?,?,'in_progress',CURRENT_TIMESTAMP,'{}','[]')`).bind(id,eid,u.user_id).run(); return ok({attempt_id:id,exam:{id:e.id,title:e.title,instructions:e.instructions,duration_minutes:e.duration_minutes,time_limit_enabled:e.time_limit_enabled!==0,strict_mode:e.strict_mode,fullscreen_required:e.fullscreen_required,terminate_on_exit:e.terminate_on_exit,show_score:e.show_score,assessment_type:e.assessment_type,assessment_label:e.assessment_label,center_label:e.center_label,questions:publicExamQuestions(e.question_json)}});
   }
@@ -749,6 +758,12 @@ async function routeApi(request, env, ctx, url) {
     const qs=JSON.parse(a.question_json||'[]'), ans=b.answers||{}; let score=0,max=0;
     for(const q of qs){ const pts=Number(q.points||1); max+=pts; if(q.type==='mcq' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='truefalse' && String(ans[q.id])===String(q.answer)) score+=pts; if(q.type==='fill' && String(ans[q.id]??'').trim().toLocaleLowerCase('vi-VN')===String(q.answer??'').trim().toLocaleLowerCase('vi-VN')) score+=pts; if(q.type==='multi'){let expected=[];try{expected=JSON.parse(q.answer||'[]')}catch{}const actual=Array.isArray(ans[q.id])?ans[q.id]:[];if(JSON.stringify([...actual].sort())===JSON.stringify([...expected].sort()))score+=pts;} }
     await env.DB.prepare(`UPDATE exam_attempts SET answers_json=?,event_log_json=?,score=?,max_score=?,status='submitted',submitted_at=CURRENT_TIMESTAMP WHERE id=?`).bind(JSON.stringify(ans),JSON.stringify(b.events||[]),score,max,a.id).run(); return ok({score,max_score:max,show_score:a.show_score!==0});
+  }
+
+  if(path==='/api/admin/assessment-center' && method==='GET'){
+    const u=await requireRole(request,env,['super_admin','school_admin','account_admin']);
+    const rows=await env.DB.prepare(`SELECT e.id,e.class_id,e.title,e.instructions,e.duration_minutes,e.time_limit_enabled,e.strict_mode,e.status,e.opens_at,e.closes_at,e.max_attempts,e.show_score,e.fullscreen_required,e.terminate_on_exit,e.assessment_type,e.assessment_label,e.center_label,e.public_access,e.public_token,e.hide_schedule,e.created_at,e.updated_at,c.name class_name,(SELECT COUNT(*) FROM exam_attempts a WHERE a.exam_id=e.id) internal_attempts,(SELECT COUNT(*) FROM exam_guest_attempts g WHERE g.exam_id=e.id) guest_attempts,(SELECT COUNT(*) FROM exam_attempts a WHERE a.exam_id=e.id AND a.status='in_progress') active_internal,(SELECT COUNT(*) FROM exam_guest_attempts g WHERE g.exam_id=e.id AND g.status='in_progress') active_guest FROM exams e JOIN classes c ON c.id=e.class_id ORDER BY COALESCE(e.updated_at,e.created_at) DESC`).all();
+    return ok({exams:rows.results||[],viewer_role:u.role});
   }
 
   if(path==='/api/exam-center' && method==='GET'){

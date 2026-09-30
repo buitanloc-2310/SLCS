@@ -1,12 +1,12 @@
-import {installUiRuntime,syncUiContext} from '/ui-system.js?build=20260929-final1';
+import {installUiRuntime,syncUiContext} from '/ui-system.js?build=20260930-v42-final';
 installUiRuntime();
 let _classroomModulePromise=null,_mediaModulePromise=null,_beautyModulePromise=null,_qrPromise=null;
 document.documentElement.dataset.theme='light';
 document.documentElement.dataset.themeMode='light';
-const loadClassroomModule=()=>_classroomModulePromise||=import('/classroom/classroom-plus.js?build=20260929-final1');
-const loadMediaModule=()=>_mediaModulePromise||=import('/classroom/media-client.js?build=20260929-final1');
-const loadBeautyModule=()=>_beautyModulePromise||=import('/classroom/beauty-engine.js?build=20260929-final1');
-const loadQrLibrary=()=>{if(window.SLCQRCode)return Promise.resolve(window.SLCQRCode);if(_qrPromise)return _qrPromise;_qrPromise=new Promise((resolve,reject)=>{const x=document.createElement('script');x.src='/vendor/slc-qrcode.js?build=20260929-final1';x.async=true;x.onload=()=>window.SLCQRCode?resolve(window.SLCQRCode):reject(new Error('QR_INIT_FAILED'));x.onerror=()=>reject(new Error('QR_LOAD_FAILED'));document.head.appendChild(x)});return _qrPromise};
+const loadClassroomModule=()=>_classroomModulePromise||=import('/classroom/classroom-plus.js?build=20260930-v42-final');
+const loadMediaModule=()=>_mediaModulePromise||=import('/classroom/media-client.js?build=20260930-v42-final');
+const loadBeautyModule=()=>_beautyModulePromise||=import('/classroom/beauty-engine.js?build=20260930-v42-final');
+const loadQrLibrary=()=>{if(window.SLCQRCode)return Promise.resolve(window.SLCQRCode);if(_qrPromise)return _qrPromise;_qrPromise=new Promise((resolve,reject)=>{const x=document.createElement('script');x.src='/vendor/slc-qrcode.js?build=20260930-v42-final';x.async=true;x.onload=()=>window.SLCQRCode?resolve(window.SLCQRCode):reject(new Error('QR_INIT_FAILED'));x.onerror=()=>reject(new Error('QR_LOAD_FAILED'));document.head.appendChild(x)});return _qrPromise};
 const $ = (q,root=document)=>root.querySelector(q);
 const app=$('#app');
 function debugLog(...args){if(globalThis.__SLC_DEBUG__===true)console.debug(...args)}
@@ -753,11 +753,11 @@ async function admin(){
   $('#adminCreateClass')?.addEventListener('submit',async e=>{e.preventDefault();const r=await api('/api/admin/classes/create',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});alert(`Đã tạo lớp. Mã: ${r.join_code}`);admin()});
   document.querySelectorAll('[data-save-ticket]').forEach(b=>b.onclick=async()=>{const id=b.dataset.saveTicket;await api(`/api/admin/tickets/${id}`,{method:'PATCH',body:JSON.stringify({status:$(`[data-ticket-status="${id}"]`).value})});alert('Đã cập nhật ticket.')});
   const saveSettings=async form=>{const data=Object.fromEntries(new FormData(form));if(form.id==='settingsForm')data.site_reduce_motion=form.elements.site_reduce_motion?.checked?'1':'0';await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(data)});alert('Đã lưu cấu hình. Giao diện sẽ áp dụng sau khi tải lại trang.')};
-  $('#settingsForm')?.addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.__revision_note='Xuất bản từ Website Studio';if(e.target.elements.site_reduce_motion)data.site_reduce_motion=e.target.elements.site_reduce_motion.checked?'1':'0';await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(data)});localStorage.removeItem('slc.website.draft');$('#editorDraftState').textContent='Đã xuất bản';await loadPublicConfig();alert('Đã xuất bản thay đổi và tạo lịch sử phiên bản.')});
+  $('#settingsForm')?.addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.__revision_note='Xuất bản từ Website Studio';if(e.target.elements.site_reduce_motion)data.site_reduce_motion=e.target.elements.site_reduce_motion.checked?'1':'0';await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(data)});localStorage.removeItem('slc.website.draft.v38');$('#editorDraftState').textContent='Đã xuất bản';await loadPublicConfig();alert('Đã xuất bản thay đổi và tạo lịch sử phiên bản.')});
   const studioForm=$('#settingsForm'), studioHistory=[], studioFuture=[];
   const studioSnapshot=()=>studioForm?Object.fromEntries(new FormData(studioForm)):{};
   const studioApply=o=>{if(!studioForm||!o)return;Object.entries(o).forEach(([k,v])=>{const el=studioForm.elements[k];if(!el)return;if(el.type==='checkbox')el.checked=v==='1'||v===true||v==='on';else el.value=v??''})};
-  if(studioForm){try{const d=JSON.parse(localStorage.getItem('slc.website.draft')||'null');if(d)studioApply(d)}catch{} let timer;studioForm.addEventListener('input',()=>{studioHistory.push(studioSnapshot());if(studioHistory.length>30)studioHistory.shift();studioFuture.length=0;clearTimeout(timer);timer=setTimeout(()=>{localStorage.setItem('slc.website.draft',JSON.stringify(studioSnapshot()));const x=$('#editorDraftState');if(x)x.textContent='Bản nháp đã tự lưu trên thiết bị'},250)});}
+  if(studioForm){try{const d=JSON.parse(localStorage.getItem('slc.website.draft.v38')||'null');if(d)studioApply(d)}catch{} let timer;studioForm.addEventListener('input',()=>{studioHistory.push(studioSnapshot());if(studioHistory.length>30)studioHistory.shift();studioFuture.length=0;clearTimeout(timer);timer=setTimeout(()=>{localStorage.setItem('slc.website.draft.v38',JSON.stringify(studioSnapshot()));const x=$('#editorDraftState');if(x)x.textContent='Bản nháp đã tự lưu trên thiết bị'},250)});}
   $('#editorUndo')?.addEventListener('click',()=>{if(studioHistory.length<2)return;studioFuture.push(studioHistory.pop());studioApply(studioHistory[studioHistory.length-1])});
   $('#editorRedo')?.addEventListener('click',()=>{const x=studioFuture.pop();if(!x)return;studioHistory.push(x);studioApply(x)});
   document.querySelectorAll('[data-preview-device]').forEach(b=>b.onclick=()=>{const p=$('#editorLivePreview');if(!p)return;p.dataset.device=b.dataset.previewDevice;document.querySelectorAll('[data-preview-device]').forEach(x=>x.classList.toggle('primary',x===b))});

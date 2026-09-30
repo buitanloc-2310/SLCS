@@ -32,7 +32,7 @@ for(const secret of ['REALTIME_APP_SECRET']) {
 }
 
 const app=read('public/app.js');
-app.includes("import('/classroom/media-client.js?v=")?pass('media client is lazy-loaded'):fail('media client lazy-load missing');
+app.includes("import('/classroom/media-client.js?v=")||app.includes("import('/classroom/media-client.js?build=")?pass('media client is lazy-loaded'):fail('media client lazy-load missing');
 app.includes("if(!wsOnline&&!document.hidden)loadHttpChat()")?pass('HTTP chat polling is fallback-only'):fail('chat polling optimization missing');
 app.includes("state.user.role==='super_admin'?'<button class=\"btn\" data-admin-tab=\"system\"")
   ? pass('system tab is super-admin gated') : fail('system tab super-admin gate not found');

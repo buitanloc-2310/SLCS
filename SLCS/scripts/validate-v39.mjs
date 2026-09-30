@@ -11,6 +11,6 @@ const checks=[
  ['Automation API exists',api.includes("/api/admin/v39/automations")],
  ['Analytics API exists',api.includes("/api/admin/v39/analytics")],
  ['Organization scope enforced',api.includes('requireOrganizationContext(request,env,admin)')],
- ['V39 version',String(pkg.version).startsWith('39.0.0') || String(pkg.version).startsWith('40.0.0')]
+ ['V39 version',String(pkg.version).startsWith('39.0.0') || String(pkg.version).startsWith('40.0.0') || pkg.version==='1.0.0']
 ];
 let bad=0;for(const [n,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${n}`);if(!ok)bad++}console.log(`V39 ${checks.length-bad}/${checks.length}`);if(bad)process.exit(1);

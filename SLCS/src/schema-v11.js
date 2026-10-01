@@ -339,48 +339,5 @@ export const V11_SCHEMA_STAGES = [
       "CREATE INDEX IF NOT EXISTS idx_assessment_email_verify ON assessment_email_verifications(exam_id,email,created_at DESC);"
     ]
   }
-  ,{
-    "name": "0025_assessment_integrity_v43",
-    "statements": [
-      "CREATE TABLE IF NOT EXISTS assessment_candidates (id TEXT PRIMARY KEY, exam_id TEXT NOT NULL, full_name TEXT NOT NULL, email TEXT NOT NULL, candidate_code TEXT NOT NULL, class_name TEXT, status TEXT NOT NULL DEFAULT 'eligible', accommodation_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(exam_id,candidate_code), FOREIGN KEY(exam_id) REFERENCES exams(id) ON DELETE CASCADE);",
-      "CREATE INDEX IF NOT EXISTS idx_assessment_candidates_identity ON assessment_candidates(exam_id,email,candidate_code,status);",
-      "CREATE TABLE IF NOT EXISTS assessment_rate_limits (bucket TEXT NOT NULL, subject_hash TEXT NOT NULL, window_start TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(bucket,subject_hash,window_start));",
-      "CREATE TABLE IF NOT EXISTS assessment_incidents (id TEXT PRIMARY KEY, exam_id TEXT NOT NULL, attempt_id TEXT, source TEXT NOT NULL DEFAULT 'internal', category TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'info', detail TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', created_by TEXT, resolved_by TEXT, resolution TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, resolved_at TEXT, FOREIGN KEY(exam_id) REFERENCES exams(id) ON DELETE CASCADE);",
-      "CREATE INDEX IF NOT EXISTS idx_assessment_incidents_exam ON assessment_incidents(exam_id,status,created_at DESC);"
-    ]
-  }
-,
-  {
-    "name": "0026_assessment_professional_v44",
-    "statements": [
-      "ALTER TABLE exams ADD COLUMN review_policy TEXT NOT NULL DEFAULT 'none';",
-      "ALTER TABLE exams ADD COLUMN review_opens_at TEXT;",
-      "ALTER TABLE exams ADD COLUMN review_closes_at TEXT;",
-      "ALTER TABLE exams ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'draft';",
-      "ALTER TABLE exams ADD COLUMN approved_by TEXT;",
-      "ALTER TABLE exams ADD COLUMN approved_at TEXT;",
-      "ALTER TABLE exams ADD COLUMN published_at TEXT;",
-      "ALTER TABLE exams ADD COLUMN owner_user_id TEXT;",
-      "ALTER TABLE exam_attempts ADD COLUMN answer_revision INTEGER NOT NULL DEFAULT 0;",
-      "ALTER TABLE exam_guest_attempts ADD COLUMN answer_revision INTEGER NOT NULL DEFAULT 0;",
-      "ALTER TABLE assessment_question_bank ADD COLUMN lifecycle_status TEXT NOT NULL DEFAULT 'draft';",
-      "ALTER TABLE assessment_question_bank ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0;",
-      "ALTER TABLE assessment_question_bank ADD COLUMN correct_count INTEGER NOT NULL DEFAULT 0;",
-      "ALTER TABLE assessment_question_bank ADD COLUMN response_count INTEGER NOT NULL DEFAULT 0;",
-      "ALTER TABLE assessment_receipts ADD COLUMN receipt_hash TEXT;",
-      "ALTER TABLE assessment_receipts ADD COLUMN snapshot_hash TEXT;",
-      "ALTER TABLE assessment_receipts ADD COLUMN answer_hash TEXT;",
-      "CREATE TABLE IF NOT EXISTS assessment_exam_versions (\n  id TEXT PRIMARY KEY, exam_id TEXT NOT NULL, version_no INTEGER NOT NULL, snapshot_json TEXT NOT NULL,\n  change_summary TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  UNIQUE(exam_id,version_no), FOREIGN KEY(exam_id) REFERENCES exams(id) ON DELETE CASCADE\n);",
-      "CREATE TABLE IF NOT EXISTS assessment_exam_roles (\n  exam_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL,\n  created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY(exam_id,user_id,role), FOREIGN KEY(exam_id) REFERENCES exams(id) ON DELETE CASCADE\n);",
-      "CREATE TABLE IF NOT EXISTS assessment_answer_revisions (\n  id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'internal', revision INTEGER NOT NULL,\n  answers_json TEXT NOT NULL, events_json TEXT NOT NULL DEFAULT '[]', accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  UNIQUE(attempt_id,source,revision)\n);",
-      "CREATE INDEX IF NOT EXISTS idx_assessment_answer_revisions ON assessment_answer_revisions(attempt_id,source,revision DESC);",
-      "CREATE TABLE IF NOT EXISTS assessment_grade_changes (\n  id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, question_id TEXT, old_score REAL, new_score REAL,\n  reason TEXT NOT NULL, requested_by TEXT NOT NULL, approved_by TEXT, status TEXT NOT NULL DEFAULT 'approved',\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, approved_at TEXT\n);",
-      "CREATE TABLE IF NOT EXISTS assessment_competencies (\n  id TEXT PRIMARY KEY, organization_id TEXT, code TEXT NOT NULL, name TEXT NOT NULL, description TEXT,\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(organization_id,code)\n);",
-      "CREATE TABLE IF NOT EXISTS assessment_question_competencies (\n  question_id TEXT NOT NULL, competency_id TEXT NOT NULL, weight REAL NOT NULL DEFAULT 1,\n  PRIMARY KEY(question_id,competency_id)\n);",
-      "CREATE INDEX IF NOT EXISTS idx_assessment_versions_exam ON assessment_exam_versions(exam_id,version_no DESC);",
-      "CREATE INDEX IF NOT EXISTS idx_assessment_incidents_attempt ON assessment_incidents(attempt_id,status);"
-]
-  }
-
 
 ];

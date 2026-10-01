@@ -45,7 +45,7 @@ check('asset build token is neutral',!!build&&!/40\.0|v40/i.test(build));
 check('index assets share build token',build&&['styles.css','auth-shell.css','design-system.css'].every(f=>idx.includes(`${f}?build=${build}`)));
 check('app lazy assets share build token',build&&['ui-system.js','classroom/classroom-plus.js','classroom/media-client.js','classroom/beauty-engine.js','vendor/slc-qrcode.js'].every(f=>app.includes(`${f}?build=${build}`)));
 check('no stale numbered cache in public entry',!idx.includes('40.0.1')&&!app.includes('40.0.1'));
-check('26 canonical migrations',migrations.length===26);
+check('28 canonical migrations',migrations.length===28);
 check('installer embeds every canonical migration',migrations.every(f=>schema.includes(path.basename(f,'.sql'))));
 check('no backup source files',!function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isDirectory()){if(walk(p))return true}else if(/\.bak(?:-|$)|\.orig$|~$/.test(e.name))return true}return false}('.'));
 check('functions API delegates to canonical backend',read('functions/api/[[path]].js').includes("from '../../src/index.js'"));

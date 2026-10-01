@@ -16,6 +16,12 @@ const checks=[
  ['Assessment receipts runtime',/INSERT INTO assessment_receipts/.test(api)],
  ['Scoped grants runtime',/FROM scoped_role_grants/.test(api)],
  ['Private file organization scope',/x\.file_id=\? AND COALESCE\(x\.organization_id/.test(api)],
- ['Fresh DB migrations',migrationPass&&migrationCount===26&&migrationIntegrity==='ok'],['Canonical final UX',/FINAL UX CANONICAL LAYER/.test(css)]
+ ['Fresh DB migrations',migrationPass&&migrationCount===28&&migrationIntegrity==='ok'],['Canonical final UX',/FINAL UX CANONICAL LAYER/.test(css)],
+ ['Assessment deadline locks autosave', api.includes("status:'deadline_locked'") && api.includes('now>=deadline?safeJson(a.answers_json')],
+ ['Assessment bank answer permission', api.includes('assessment.bank.answer.view') && api.includes('delete q.answer_json')],
+ ['Assessment roster enforcement', api.includes('assessment_candidates') && api.includes('khớp danh sách thí sinh')],
+ ['Assessment appeal workflow', api.includes('appeal.opened') && api.includes('appeal.reviewed')],
+ ['Guest attempt bearer transport', app.includes('Authorization:`Bearer ${guestKey}`') && api.includes("request.headers.get('authorization')")],
 ];
-let fail=0; for(const [n,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${n}`);if(!ok)fail++} console.log(`FINAL FEATURE PRESERVATION: ${checks.length-fail}/${checks.length}`); if(fail)process.exit(1);
+let fail=0; for(const [n,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${n}`);if(!ok)fail++} 
+console.log(`FINAL FEATURE PRESERVATION: ${checks.length-fail}/${checks.length}`); if(fail)process.exit(1);

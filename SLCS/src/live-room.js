@@ -129,7 +129,7 @@ export class LiveRoom {
       if(action==='policy'){
         const incoming=msg.settings&&typeof msg.settings==='object'?msg.settings:{};
         const policy={};
-        for(const k of ['allow_student_mic','allow_student_camera','allow_student_share','allow_chat','allow_reactions']) if(k in incoming) policy[k]=incoming[k]?1:0;
+        for(const k of ['allow_student_mic','allow_student_camera','allow_student_share','allow_chat','allow_reactions','allow_anonymous_pulse','adaptive_video']) if(k in incoming) policy[k]=incoming[k]?1:0;
         for(const [,p] of this.clients) p.settings={...(p.settings||{}),...policy};
         this.broadcast({type:'host-command',action:'policy',settings:policy,from:peerId,fromName:name,fromRole:role},peerId);
         return;
@@ -146,7 +146,7 @@ export class LiveRoom {
     if (msg.type === 'media-track-published') { msg.sessionId=String(msg.sessionId||'').slice(0,120); msg.trackName=String(msg.trackName||'').slice(0,180); msg.kind=['audio','video'].includes(msg.kind)?msg.kind:''; msg.source=String(msg.source||'').slice(0,30); }
     if (msg.type === 'media-track-unpublished') msg.trackName = String(msg.trackName || '').slice(0, 180);
     if (msg.type === 'media-state') { msg.source = String(msg.source || '').slice(0,30); msg.enabled = !!msg.enabled; }
-    if (msg.type === 'class-pulse') { msg.value=String(msg.value||'').slice(0,30); msg.anonymous=!!msg.anonymous; }
+    if (msg.type === 'class-pulse') { msg.value=String(msg.value||'').slice(0,30); msg.anonymous=Number(roomSettings.allow_anonymous_pulse)?!!msg.anonymous:false; }
     if (msg.type === 'whisper' || msg.type==='ask-later') msg.text = String(msg.text || '').slice(0, 1600);
     if(msg.type==='raise-hand'){sender.handRaisedAt=Date.now(); msg.raisedAt=sender.handRaisedAt;}
     if(msg.type==='lower-hand'){sender.handRaisedAt=0;}

@@ -3,7 +3,7 @@ const app=fs.readFileSync('public/app.js','utf8'), api=fs.readFileSync('src/inde
 const tests=[
  ['beauty entitlement API',api.includes("/api/beauty/me")&&api.includes('BEAUTY_OWNER_USER_ID')],
  ['beauty hidden without entitlement',app.includes('beautyAllowed=beautyAccess?.allowed===true')],
- ['beauty module lazy load',app.includes('loadBeautyModule')&&/beauty-engine\.js\?(?:v=(?:20260920-p23-beauty1|40\.0\.[01])|build=20261001-media-assessment-repair)/.test(app)],
+ ['beauty module lazy load',app.includes('loadBeautyModule')&&/beauty-engine\.js\?(?:v=(?:20260920-p23-beauty1|40\.0\.[01])|build=20261001-final-hardening)/.test(app)],
  ['camera publishes processed track',app.includes("await applyBeauty({republish:false})")],
  ['beauty can restore raw camera',app.includes("stopBeauty({restorePublish:true})")],
  ['audio not processed',!beauty.includes('AudioContext')&&!beauty.includes('getAudioTracks')],

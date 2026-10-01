@@ -17,7 +17,7 @@ const checks=[];
 const check=(name,ok)=>checks.push([name,!!ok]);
 check('neutral production package version',pkg.version==='1.0.0');
 check('single neutral production validator',pkg.scripts?.['validate:production']==='npm run check && node scripts/validate-production.mjs');
-check('PBKDF2 set to 10000',api.includes('const PASSWORD_KDF_ITERATIONS=10000;')&&!api.includes('PASSWORD_KDF_ITERATIONS=210000'));
+check('PBKDF2 v3 set to 100000 with upgrade path',api.includes("const PASSWORD_KDF_VERSION='v3'")&&api.includes('const PASSWORD_KDF_ITERATIONS=100000;')&&api.includes('parsePasswordSaltSpec')&&api.includes('passwordNeedsUpgrade'));
 check('safeHttpUrl exists before footer',app.indexOf('function safeHttpUrl')>=0&&app.indexOf('function safeHttpUrl')<app.indexOf('function footer'));
 check('authenticated user normalization',app.includes('function normalizeUser')&&app.includes('function userShortName')&&!app.includes('state.user.full_name.split'));
 check('array boundary drops null entries',app.includes('Array.isArray(v)?v.filter(x=>x!==null&&x!==undefined):[]'));

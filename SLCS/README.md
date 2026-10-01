@@ -224,3 +224,30 @@ Schema migration: `0024_red_orange_hardening.sql`.
 Validation on this package: `npm ci` PASS; `npm run check` PASS; `npm run validate:production` 35/35 PASS; all 30 `validate-*.mjs` scripts PASS; red/orange media-assessment gate 52/52 PASS; all 26 migrations apply cleanly to a fresh SQLite database with `PRAGMA integrity_check = ok`.
 
 Production-only verification still required after deployment: two-device real microphone/camera/audio transport, real Cloudflare Realtime credentials, real Email provider delivery for OTP, and real Durable Object binding behavior cannot be proven from the offline ZIP alone.
+
+## Final hardening pass — 2026-10-01
+
+Vòng hardening cuối giữ nguyên kiến trúc Cloudflare Pages + D1 + R2 và không thêm dependency runtime. Các thay đổi chính:
+
+- Adaptive Video hoạt động thật trên SFU và P2P fallback: đọc WebRTC stats, RTT/packet loss và Network Information khi trình duyệt hỗ trợ; tự hạ bitrate, resolution scale và số video ưu tiên khi mạng xấu, sau đó phục hồi khi mạng ổn định.
+- Anonymous Classroom Pulse được enforce ở backend cho cả Durable Object và Pages+D1 fallback. Khi lớp tắt anonymous pulse, client không thể tự gửi cờ ẩn danh để vượt policy.
+- Support Ticket dùng `support_ticket_messages` cho hội thoại nhiều lượt giữa người dùng và quản trị viên; ticket đóng không nhận thêm phản hồi.
+- Certificate có public verification bằng mã SFCA, trạng thái hợp lệ/thu hồi, lý do thu hồi và workflow cấp/thu hồi theo organization.
+- `/api/public/site-config` chỉ trả whitelist setting dành cho public, không còn trả toàn bộ `system_settings`.
+- Password KDF chuyển sang version `v3`, PBKDF2-SHA256 100,000 iterations. Hash legacy/v2 vẫn đăng nhập được và tự nâng lên v3 sau lần đăng nhập thành công.
+- `grade_change_log`, `assessment_receipts` và organization-scoped `scoped_role_grants` đã được nối vào runtime.
+- Quyền đọc private file của School Admin được giới hạn theo organization thay vì quyền toàn cục.
+- Command Center đếm ticket theo organization và notification theo người dùng hiện tại.
+
+### Các bảng schema còn chưa dùng trực tiếp
+
+Sau vòng cuối còn 19 bảng không được runtime production gọi trực tiếp. Chúng được **giữ lại có chủ đích để tương thích migration**, không được tính là tính năng đang hoạt động:
+
+- **Legacy / đã được thay thế:** `live_sessions`, `audit_logs`, `quizzes`, `live_room_settings`, `live_runtime_participants`, `live_runtime_signals`, `live_runtime_messages`, `platform_audit_v2`.
+- **Schema dự phòng cho roadmap, chưa công bố là tính năng:** `learning_units`, `lessons`, `lesson_progress`, `system_jobs`, `class_settings`, `class_access_codes`, `class_invite_codes`, `organization_branding`, `assessment_sections`, `assessment_appeals`, `resource_folders`.
+
+Không xóa các bảng này trong bản final vì database đã triển khai có thể đang chứa schema/record từ các release trước. Khi phát triển chức năng tương ứng ở version sau, phải dùng migration mới thay vì sửa migration lịch sử.
+
+### Final gate
+
+Chạy `npm run validate:final` trước khi deploy. Offline gate bao gồm syntax, production validation, feature-preservation/hardening checks và toàn bộ migration phải áp được trên database sạch. Kiểm tra mic/camera/audio giữa hai thiết bị, Cloudflare Realtime thực, Email provider và binding production vẫn là bước QA production sau deploy và không được suy ra từ test offline.

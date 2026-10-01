@@ -7,5 +7,5 @@ const keys=['site_primary_color','site_primary_dark','site_background_color','si
 let fail=0;
 for(const k of keys){const ok=app.includes(k)&&api.includes(k); console.log(ok?'PASS':'FAIL',k); if(!ok)fail++}
 for(const token of ['--site-primary','--site-bg','--site-surface','--site-text','--site-border','--site-radius','--site-button-radius','--site-input-radius','--site-content-width']){const ok=css.includes(token); console.log(ok?'PASS':'FAIL','css '+token); if(!ok)fail++}
-for(const check of [['cache bust',html.includes('v=31.0.0')||html.includes('build=20261001-media-assessment-repair')],['school admin website save',api.includes("requireRole(request,env,['super_admin','school_admin'])")],['editor layout section',app.includes('editor-layout')]]){console.log(check[1]?'PASS':'FAIL',check[0]);if(!check[1])fail++}
+for(const check of [['cache bust',html.includes('v=31.0.0')||html.includes('build=20261001-final-hardening')],['school admin website save',api.includes("requireRole(request,env,['super_admin','school_admin'])")],['editor layout section',app.includes('editor-layout')]]){console.log(check[1]?'PASS':'FAIL',check[0]);if(!check[1])fail++}
 if(fail){console.error(`UI V31: ${fail} failed`);process.exit(1)}console.log('UI V31 GOVERNANCE: PASS');

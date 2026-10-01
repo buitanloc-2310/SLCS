@@ -10,6 +10,7 @@
     "db:migrate": "npx --yes wrangler@4.34.0 d1 migrations apply skyfirsthoctap --remote",
     "db:migrate:local": "npx --yes wrangler@4.34.0 d1 migrations apply skyfirsthoctap --local",
     "deploy": "npx --yes wrangler@4.34.0 pages deploy public --project-name slc",
-    "deploy:production": "npm run validate:production && npm run db:migrate && npm run deploy"
+    "deploy:production": "npm run validate:production && npm run db:migrate && npm run deploy",
+    "validate:final": "npm run validate:production && node scripts/validate-final.mjs"
   }
 }

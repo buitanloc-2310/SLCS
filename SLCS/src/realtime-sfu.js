@@ -62,10 +62,10 @@ export function renegotiateRealtimeSession(env, sessionId, payload) {
 
 
 export function closeRealtimeTracks(env, sessionId, tracks = []) {
-  const clean=(Array.isArray(tracks)?tracks:[]).map(t=>({mid:t?.mid,trackName:String(t?.trackName||'')})).filter(t=>t.trackName);
+  const clean=(Array.isArray(tracks)?tracks:[]).map(t=>String(t?.mid??'').trim()).filter(Boolean).map(mid=>({mid}));
   if(!clean.length) return Promise.resolve({});
   return realtimeSfuRequest(env, `/sessions/${encodeURIComponent(sessionId)}/tracks/close`, {
-    method: 'PUT', body: JSON.stringify({ tracks: clean })
+    method: 'PUT', body: JSON.stringify({ tracks: clean, force: true })
   });
 }
 

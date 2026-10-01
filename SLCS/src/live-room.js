@@ -162,7 +162,7 @@ export class LiveRoom {
     else this.broadcast(msg, peerId);
   }
 
-  broadcastToHosts(payload){const raw=JSON.stringify(payload);for(const [,p] of this.clients){if(!['teacher','assistant'].includes(p.role))continue;try{p.ws.send(raw)}catch{}}}
+  broadcastToHosts(payload){const raw=JSON.stringify(payload);for(const [,p] of this.clients){if(!['teacher','assistant','school_admin','super_admin'].includes(p.role))continue;try{p.ws.send(raw)}catch{}}}
 
   broadcast(payload, exceptId = null) {
     const raw = JSON.stringify(payload);

@@ -7,6 +7,11 @@ export class SkyMediaClient {
     this.videoSubscriptions=new Set(); this.recovering=false; this.remoteMetaByMid=new Map(); this.remoteWaitersByMid=new Map(); this.remoteStreamsBySession=new Map();
   }
   _serial(fn){const next=this.queue.then(fn,fn);this.queue=next.catch(()=>{});return next}
+  _waitForIceGathering(timeoutMs=8000){
+    const pc=this.pc;if(!pc)return Promise.reject(new Error('MEDIA_PC_MISSING'));
+    if(pc.iceGatheringState==='complete')return Promise.resolve(pc.localDescription);
+    return new Promise((resolve,reject)=>{let done=false;const finish=(err)=>{if(done)return;done=true;clearTimeout(timer);pc.removeEventListener('icegatheringstatechange',check);err?reject(err):resolve(pc.localDescription)};const check=()=>{if(pc.iceGatheringState==='complete')finish()};const timer=setTimeout(()=>finish(new Error('MEDIA_ICE_GATHER_TIMEOUT')),timeoutMs);pc.addEventListener('icegatheringstatechange',check)});
+  }
   _waitForConnected(timeoutMs=8000){
     const pc=this.pc;if(!pc)return Promise.reject(new Error('MEDIA_PC_MISSING'));
     if(pc.connectionState==='connected'||pc.iceConnectionState==='connected'||pc.iceConnectionState==='completed')return Promise.resolve();
@@ -22,7 +27,7 @@ export class SkyMediaClient {
     this.closed=false;const r=await this.api('/api/live/media/session/new',{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})});
     if(!r?.session_id)throw new Error('MEDIA_SESSION_MISSING');this.sessionId=r.session_id;
     this.pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.cloudflare.com:3478'}],bundlePolicy:'max-bundle'});
-    this.pc.addEventListener('connectionstatechange',()=>{this.onState(this.pc.connectionState);if(this.pc.connectionState==='failed')this.recoverIce()});
+    this.pc.addEventListener('connectionstatechange',()=>{this.onState(this.pc.connectionState);if(this.pc.connectionState==='failed')this.recoverIce().catch(e=>console.warn('[SLC Media] ICE recovery failed',e))});
     this.pc.addEventListener('iceconnectionstatechange',()=>this.onState(`ice:${this.pc.iceConnectionState}`));
     this.pc.addEventListener('track',event=>{
       const track=event.track;
@@ -68,9 +73,9 @@ export class SkyMediaClient {
       const transceiver=this.pc.addTransceiver(track,{direction:'sendonly'});
       const offer=await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
-      // Use the description actually installed on the PeerConnection.  On mobile
-      // Chromium this is important after prior SFU renegotiations because it is the
-      // browser's canonical MID/m-section state for the current negotiation.
+      // Cloudflare Realtime expects the gathered localDescription, not the raw
+      // createOffer() result. Wait for ICE gathering before sending SDP upstream.
+      await this._waitForIceGathering();
       const localOffer=this.pc.localDescription;
       const mid=transceiver.mid;if(mid==null)throw new Error('MEDIA_PUBLISH_MID_MISSING');
       if(localOffer?.type!=='offer'||!localOffer.sdp)throw new Error('MEDIA_PUBLISH_OFFER_MISSING');
@@ -84,8 +89,8 @@ export class SkyMediaClient {
         console.error('[P0.2][PUBLISH_ANSWER_REJECTED]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState,error:error?.message||String(error)});
         // Do not leave a failed sender feeding media locally.  A failed SFU answer
         // must be treated as a failed publish rather than pretending the camera is live.
-        try{await transceiver.sender.replaceTrack(null)}catch{}
-        try{transceiver.stop()}catch{}
+        try{await transceiver.sender.replaceTrack(null)}catch(e){console.warn('[SLC Media] rollback replaceTrack',e)}
+        try{transceiver.stop()}catch(e){console.warn('[SLC Media] rollback transceiver',e)}
         throw new Error('MEDIA_PUBLISH_NEGOTIATION_FAILED');
       }
       debugLog('[P0.2][PUBLISH_ANSWER_OK]',{source,kind:track.kind,mid,signalingState:this.pc.signalingState});
@@ -96,7 +101,7 @@ export class SkyMediaClient {
   }
   async setPublishedEnabled(source,enabled){const item=this.published.get(source);if(!item?.track)return false;item.track.enabled=!!enabled;return true}
   async heartbeat(){if(this.closed||!this.sessionId)return false;await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/heartbeat`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})});return true}
-  async unpublish(source){const item=this.published.get(source);if(!item)return;try{await item.sender.replaceTrack(null)}catch{};this.published.delete(source);try{await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/unpublish`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,track_name:item.meta.trackName})})}catch{}}
+  async unpublish(source){const item=this.published.get(source);if(!item)return;try{await item.sender.replaceTrack(null)}catch(e){console.warn('[SLC Media] unpublish replaceTrack',e)};this.published.delete(source);try{await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/unpublish`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,track_name:item.meta.trackName})})}catch(e){console.warn('[SLC Media] unpublish API',e);this.onState(`unpublish-failed:${e?.message||'unknown'}`)}}
   async subscribe(meta){
     if(!meta?.sessionId||!meta?.trackName||meta.sessionId===this.sessionId)return;const key=`${meta.sessionId}:${meta.trackName}`;
     if(this.subscribed.has(key)||this.subscribing.has(key))return;const isVideo=meta.kind==='video',priorityVideo=meta.source==='screen'||['teacher','assistant'].includes(meta.role);if(isVideo&&!priorityVideo&&this.videoSubscriptions.size>=this.maxVideoSubscriptions)return;
@@ -111,14 +116,15 @@ export class SkyMediaClient {
       const waits=[];for(const t of pulled){if(t.mid==null)throw new Error('MEDIA_SUBSCRIBE_MID_MISSING');const mid=String(t.mid);const mapped={...meta,sessionId:t.sessionId||t.session_id||meta.sessionId,trackName:t.trackName||t.track_name||meta.trackName,kind:t.kind||meta.kind,source:t.source||meta.source,ownerName:t.ownerName||t.owner_name||meta.ownerName,mid};this.remoteMetaByMid.set(mid,mapped);waits.push(this._waitForRemoteMid(mid));debugLog('[P0][MID_MAPPED]',{mid,sessionId:mapped.sessionId,trackName:mapped.trackName,kind:mapped.kind,source:mapped.source})}
       if(result.requiresImmediateRenegotiation||result.sessionDescription?.type==='offer'){
         if(result.sessionDescription?.type!=='offer'||!result.sessionDescription?.sdp)throw new Error('MEDIA_SUBSCRIBE_OFFER_MISSING');
-        await this.pc.setRemoteDescription(result.sessionDescription);debugLog('[P0][REMOTE_DESCRIPTION]',{signalingState:this.pc.signalingState});const answer=await this.pc.createAnswer();await this.pc.setLocalDescription(answer);debugLog('[P0][LOCAL_ANSWER]',{signalingState:this.pc.signalingState});
-        const rr=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`,{method:'PUT',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,sessionDescription:{type:'answer',sdp:answer.sdp}})});if(rr?.errorCode)throw new Error(rr.errorDescription||'MEDIA_RENEGOTIATE_FAILED');
+        await this.pc.setRemoteDescription(result.sessionDescription);debugLog('[P0][REMOTE_DESCRIPTION]',{signalingState:this.pc.signalingState});const answer=await this.pc.createAnswer();await this.pc.setLocalDescription(answer);await this._waitForIceGathering();const localAnswer=this.pc.localDescription;debugLog('[P0][LOCAL_ANSWER]',{signalingState:this.pc.signalingState,iceGatheringState:this.pc.iceGatheringState});
+        if(localAnswer?.type!=='answer'||!localAnswer.sdp)throw new Error('MEDIA_SUBSCRIBE_ANSWER_MISSING');
+        const rr=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`,{method:'PUT',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,sessionDescription:{type:localAnswer.type,sdp:localAnswer.sdp}})});if(rr?.errorCode)throw new Error(rr.errorDescription||'MEDIA_RENEGOTIATE_FAILED');
       } else if(result.sessionDescription?.type==='answer'&&this.pc.signalingState==='have-local-offer') await this.pc.setRemoteDescription(result.sessionDescription);
       await this._waitForConnected();await Promise.all(waits);
     });this.subscribed.add(key);if(isVideo)this.videoSubscriptions.add(key)
     }catch(e){this.subscribed.delete(key);this.videoSubscriptions.delete(key);throw e}finally{this.subscribing.delete(key)}
   }
   setAdaptiveLimit(limit=12){this.maxVideoSubscriptions=Math.max(2,Math.min(24,Number(limit||12)))}
-  async recoverIce(){if(this.closed||this.recovering||!this.pc||!this.sessionId)return;this.recovering=true;try{this.onState('recovering');this.pc.restartIce?.();const offer=await this.pc.createOffer({iceRestart:true});await this.pc.setLocalDescription(offer);const result=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`,{method:'PUT',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,sessionDescription:{type:'offer',sdp:offer.sdp}})});if(result?.sessionDescription?.sdp)await this.pc.setRemoteDescription(result.sessionDescription);await this._waitForConnected();this.onState('recovered')}catch(e){this.onState(`recover-failed:${e?.message||'unknown'}`)}finally{setTimeout(()=>{this.recovering=false},1800)}}
-  async close({keepalive=false}={}){if(this.closed)return;this.closed=true;this.remoteStreamsBySession.clear();try{this.pc?.close()}catch{};if(this.sessionId){try{if(keepalive){fetch(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/end`,{method:'POST',credentials:'include',keepalive:true,headers:{'content-type':'application/json'},body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})}).catch(()=>{})}else await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/end`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})})}catch{}}}
+  async recoverIce(){if(this.closed||this.recovering||!this.pc||!this.sessionId)return;this.recovering=true;try{this.onState('recovering');this.pc.restartIce?.();const offer=await this.pc.createOffer({iceRestart:true});await this.pc.setLocalDescription(offer);await this._waitForIceGathering();const localOffer=this.pc.localDescription;if(localOffer?.type!=='offer'||!localOffer.sdp)throw new Error('MEDIA_RECOVERY_OFFER_MISSING');const result=await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/renegotiate`,{method:'PUT',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken,sessionDescription:{type:localOffer.type,sdp:localOffer.sdp}})});if(result?.sessionDescription?.sdp)await this.pc.setRemoteDescription(result.sessionDescription);await this._waitForConnected();this.onState('recovered')}catch(e){this.onState(`recover-failed:${e?.message||'unknown'}`);throw e}finally{setTimeout(()=>{this.recovering=false},1800)}}
+  async close({keepalive=false}={}){if(this.closed)return;this.closed=true;this.remoteStreamsBySession.clear();try{this.pc?.close()}catch(e){console.warn('[SLC Media] close peer connection',e)};if(this.sessionId){try{if(keepalive){fetch(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/end`,{method:'POST',credentials:'include',keepalive:true,headers:{'content-type':'application/json'},body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})}).catch(e=>console.warn('[SLC Media] keepalive close',e))}else await this.api(`/api/live/media/session/${encodeURIComponent(this.sessionId)}/end`,{method:'POST',body:JSON.stringify({class_id:this.classId,access_token:this.accessToken})})}catch(e){console.warn('[SLC Media] close session',e)}}}
 }

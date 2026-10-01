@@ -13,6 +13,6 @@ const checks=[
  ['installer tolerates already-applied ADD COLUMN',api.includes('duplicate column name')],
  ['admin class access fallback',api.includes("['school_admin','super_admin'].includes(admin.role)")],
  ['safeHttpUrl still defined',app.indexOf('function safeHttpUrl(')>=0&&app.indexOf('function safeHttpUrl(')<app.indexOf('function footer(')],
- ['repair cache bust',(read('public/index.html').includes('/app.js?v=40.0.1')&&app.includes('/ui-system.js?v=40.0.1'))||(read('public/index.html').includes('/app.js?build=20260930-v42-final')&&app.includes('/ui-system.js?build=20260930-v42-final'))]
+ ['repair cache bust',(read('public/index.html').includes('/app.js?v=40.0.1')&&app.includes('/ui-system.js?v=40.0.1'))||(read('public/index.html').includes('/app.js?build=20261001-media-assessment-repair')&&app.includes('/ui-system.js?build=20261001-media-assessment-repair'))]
 ];
 let bad=0;for(const [n,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${n}`);if(!ok)bad++;}console.log(`PRODUCTION REPAIR: ${checks.length-bad}/${checks.length} PASS`);if(bad)process.exit(1);

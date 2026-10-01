@@ -105,7 +105,7 @@ a{color:inherit}.shell{min-height:100vh;display:flex;flex-direction:column}.topb
 }
 
 /* ===== Classroom control + layout hardening ===== */
-.meeting-media-badge,#connectionLabel,.meeting-live-dot{display:none!important}
+.meeting-media-badge{display:none!important}
 .meeting-role-badge{display:inline-flex;align-items:center;height:32px;padding:0 11px;border-radius:999px;background:#eef2f7;border:1px solid #dbe3ee;color:#64748b;font-size:11px;font-weight:800;white-space:nowrap}
 .meeting-role-badge.host{background:#eef5ff;border-color:#cbdcff;color:#3159b7}
 .meeting-manage-btn{height:38px;border:1px solid #cbdcff;background:#edf4ff;color:#244fa8;border-radius:12px;padding:0 13px;font-weight:850;cursor:pointer;white-space:nowrap}

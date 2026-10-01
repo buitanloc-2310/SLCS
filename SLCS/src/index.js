@@ -639,8 +639,8 @@ async function routeApi(request, env, ctx, url) {
   if (path === '/api/auth/login' && method === 'POST') {
     const body=await request.json(); const login=str(body.login).slice(0,180); const pw=str(body.password);
     if(!login||!pw) return bad('Vui lòng nhập tài khoản và mật khẩu.');
-    const ip=request.headers.get('cf-connecting-ip')||''; const throttleKey=await sha256Text(`${normalizeEmail(login)}|${ip}`); const throttle=await checkLoginThrottle(env,throttleKey);
-    if(!throttle.allowed) return bad('Có quá nhiều lần đăng nhập không thành công. Vui lòng thử lại sau.',429,{retry_after:throttle.retry_after});
+    const ip=request.headers.get('cf-connecting-ip')||''; const normalizedLogin=normalizeEmail(login); const throttleKey=await sha256Text(`${normalizedLogin}|${ip}`); const accountThrottleKey=await sha256Text(`account|${normalizedLogin}`); const [throttle,accountThrottle]=await Promise.all([checkLoginThrottle(env,throttleKey),checkLoginThrottle(env,accountThrottleKey)]);
+    if(!throttle.allowed||!accountThrottle.allowed) return bad('Có quá nhiều lần đăng nhập không thành công. Vui lòng thử lại sau.',429,{retry_after:Math.max(Number(throttle.retry_after||0),Number(accountThrottle.retry_after||0))});
     const u=await env.DB.prepare(`SELECT * FROM users WHERE (lower(email)=lower(?) OR lower(sfn_id)=lower(?)) LIMIT 1`).bind(login,login).first();
     const good=!!u && u.status==='active' && !!u.password_salt && !!u.password_hash && await verifyPassword(pw,u.password_salt,u.password_hash);
     if(!good){const cfg=await getSettings(env).catch(()=>({}));const lim=Math.max(5,Math.min(30,Number(cfg.login_rate_limit||10)));await recordLoginFailure(env,throttleKey,lim);await recordLoginFailure(env,accountThrottleKey,Math.max(lim,15));return bad('Thông tin đăng nhập không đúng.',401);}

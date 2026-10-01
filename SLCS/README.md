@@ -212,3 +212,15 @@ Build: `20.2.0-vplus-final`
 ## Important production boundary
 
 These checks validate source structure, syntax, migration compatibility, packaging and mocked AI adapter behavior. Real Cloudflare bindings, the `skyfirsthoc` Realtime application, browser devices/networks, and an actual OpenAI account/API key can only be fully verified after deployment. VPLUS therefore uses fail-safe user messages and keeps technical diagnostics restricted to System Admin.
+
+## Red + Orange hardening — 2026-10-01
+
+This build closes the red/orange audit findings without increasing the deploy package above 100 source files.
+
+Implemented: student privacy isolation for gradebook/member email/attendance; correct unlimited exam timing and extra-time reconciliation; reset/reopen clock repair; essay manual grading; assignment publish/late/resubmission enforcement; waiting-room admission across Durable Object and Pages+D1 fallback; organization-scoped admin reads/actions; first-load shuffled exam snapshots; guest Live attendance/resources/catch-up/poll answers; real microphone signal meter and speaker test; question-bank CRUD/import; working Assessment Admin tabs; short/matching/ordering scoring and UI; public-exam email OTP verification; full review after close; weighted gradebook totals; custom IAM role assignment/effective permissions; event-driven automation plus due/stale sweep; analytics event writes; and organization quota enforcement for classes, members, storage and live capacity.
+
+Schema migration: `0024_red_orange_hardening.sql`.
+
+Validation on this package: `npm ci` PASS; `npm run check` PASS; `npm run validate:production` 35/35 PASS; all 30 `validate-*.mjs` scripts PASS; red/orange media-assessment gate 52/52 PASS; all 26 migrations apply cleanly to a fresh SQLite database with `PRAGMA integrity_check = ok`.
+
+Production-only verification still required after deployment: two-device real microphone/camera/audio transport, real Cloudflare Realtime credentials, real Email provider delivery for OTP, and real Durable Object binding behavior cannot be proven from the offline ZIP alone.

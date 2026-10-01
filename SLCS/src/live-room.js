@@ -20,7 +20,7 @@ export class LiveRoom {
     let access;
     try {
       access = await this.env.DB.prepare(`
-        SELECT t.token,t.class_id,t.user_id,t.guest_name,t.role,t.expires_at,
+        SELECT t.token,t.class_id,t.user_id,t.guest_name,t.role,t.expires_at,COALESCE(t.admitted,1) admitted,
                COALESCE(u.full_name,t.guest_name,'Guest') display_name
         FROM live_access_tokens t
         LEFT JOIN users u ON u.id=t.user_id
@@ -35,6 +35,7 @@ export class LiveRoom {
     await ensureV13Schema(this.env).catch(()=>{});
     const settings = await getClassLiveSettings(this.env,classId).catch(()=>({waiting_room:0}));
     const transport = url.searchParams.get('mode') === 'primary' ? 'sfu' : 'mesh';
+    const role = String(access.role || 'guest').slice(0, 30);const isHost = ['teacher','assistant','school_admin','super_admin'].includes(role);const needsWaiting = !!Number(settings.waiting_room) && !isHost && !Number(access.admitted);
     let maxPeers = transport === 'sfu' ? 120 : 18;
     try {
       if (transport === 'sfu') {
@@ -46,18 +47,17 @@ export class LiveRoom {
         maxPeers = Math.max(4, Math.min(40, Number(row?.value || 18)));
       }
     } catch {}
-    if (this.admittedClients().length >= maxPeers) return new Response('Phòng học đã đạt số người tham gia tối đa.', { status: 429 });
+    try{const cls=await this.env.DB.prepare(`SELECT COALESCE(organization_id,'sky-first') organization_id FROM classes WHERE id=?`).bind(classId).first();const ent=await this.env.DB.prepare(`SELECT enabled,quota_value,expires_at FROM organization_entitlements WHERE organization_id=? AND capability='live.capacity'`).bind(cls?.organization_id||'sky-first').first();if(ent&&Number(ent.enabled)===0)return new Response('Tính năng lớp trực tuyến đang bị tắt cho tổ chức.',{status:403});if(ent?.expires_at&&Date.parse(ent.expires_at)<=Date.now())return new Response('Quyền sử dụng lớp trực tuyến đã hết hạn.',{status:403});if(ent?.quota_value!=null)maxPeers=Math.max(1,Math.min(maxPeers,Number(ent.quota_value)||maxPeers));}catch{}
+    if (this.admittedClients().length >= maxPeers && !needsWaiting) return new Response('Phòng học đã đạt số người tham gia tối đa.', { status: 429 });
 
+    if(!needsWaiting&&!Number(access.admitted))await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(token,classId).run().catch(()=>{});
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     const peerId = crypto.randomUUID();
     const name = String(access.display_name || 'Guest').slice(0, 80);
-    const role = String(access.role || 'guest').slice(0, 30);
-    const isHost = ['teacher','assistant','school_admin','super_admin'].includes(role);
-    const needsWaiting = !!Number(settings.waiting_room) && !isHost;
 
     server.accept();
-    this.clients.set(peerId, { ws: server, name, role, userId: access.user_id || null, joinedAt: Date.now(), admitted: !needsWaiting, handRaisedAt: 0, settings });
+    this.clients.set(peerId, { ws: server, name, role, userId: access.user_id || null, token, joinedAt: Date.now(), admitted: !needsWaiting, handRaisedAt: 0, settings });
 
     if (needsWaiting) {
       server.send(JSON.stringify({ type:'waiting-state', status:'waiting', peerId, room:{classId,maxPeers} }));
@@ -120,10 +120,10 @@ export class LiveRoom {
       if(!host)return;
       const action=String(msg.action||'').slice(0,40), target=String(msg.target||'').slice(0,80);
       if(action==='admit' && target && this.clients.has(target)){
-        const p=this.clients.get(target); if(!p.admitted){p.admitted=true;this.sendWelcome(target,classId,maxPeers,transport);this.broadcast({type:'peer-joined',peer:{id:target,name:p.name,role:p.role}},target);this.broadcastRoster();this.broadcastToHosts({type:'waiting-left',peerId:target});await logLiveEvent(this.env,classId,'waiting.admitted',`peer:${peerId}`,name,{target,target_name:p.name}).catch(()=>{});} return;
+        if(this.admittedClients().length>=maxPeers){try{sender.ws.send(JSON.stringify({type:'host-command',action:'admit-failed',reason:'capacity'}))}catch{};return;}const p=this.clients.get(target); if(!p.admitted){p.admitted=true;await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(p.token,classId).run().catch(()=>{});this.sendWelcome(target,classId,maxPeers,transport);this.broadcast({type:'peer-joined',peer:{id:target,name:p.name,role:p.role}},target);this.broadcastRoster();this.broadcastToHosts({type:'waiting-left',peerId:target});await logLiveEvent(this.env,classId,'waiting.admitted',`peer:${peerId}`,name,{target,target_name:p.name}).catch(()=>{});} return;
       }
       if(action==='admit-all'){
-        for(const [id,p] of [...this.clients.entries()]) if(!p.admitted){p.admitted=true;this.sendWelcome(id,classId,maxPeers,transport);this.broadcast({type:'peer-joined',peer:{id,name:p.name,role:p.role}},id);} this.broadcastRoster(); this.broadcastToHosts({type:'waiting-list',waiting:[]}); return;
+        for(const [id,p] of [...this.clients.entries()]) if(!p.admitted&&this.admittedClients().length<maxPeers){p.admitted=true;await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(p.token,classId).run().catch(()=>{});this.sendWelcome(id,classId,maxPeers,transport);this.broadcast({type:'peer-joined',peer:{id,name:p.name,role:p.role}},id);} this.broadcastRoster(); this.broadcastToHosts({type:'waiting-list',waiting:[]}); return;
       }
       if(action==='remove' && target && this.clients.has(target)){try{this.clients.get(target).ws.send(JSON.stringify({type:'host-command',action:'removed',from:peerId,fromName:name}));this.clients.get(target).ws.close(4001,'removed')}catch{};return;}
       if(action==='policy'){

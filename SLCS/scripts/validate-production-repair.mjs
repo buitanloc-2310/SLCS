@@ -6,7 +6,7 @@ const cols=(examInsert.match(/INSERT INTO exams\(([^)]+)\)/)?.[1]||'').split(','
 const values=(examInsert.match(/VALUES\(([^`]*)\)`$/)?.[1]||'').split(',').filter(Boolean).length;
 const checks=[
  ['class detail isolates optional API failures',app.includes('const optional=await Promise.allSettled([api(`/api/classes/${id}/posts`)')&&app.includes('classLoadErrors')&&app.includes('fallback=arr(listing.classes).find')],
- ['exam INSERT column/value arity',cols===26&&values===26],
+ ['exam INSERT column/value arity',cols===27&&values===27],
  ['fresh installer includes assessment migration',schema.includes('0018_assessment_max_v37')],
  ['fresh installer includes website studio migration',schema.includes('0019_website_studio_v38')],
  ['fresh installer includes operations migration',schema.includes('0020_operations_v39')],

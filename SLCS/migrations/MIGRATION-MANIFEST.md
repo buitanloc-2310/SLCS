@@ -11,3 +11,5 @@ Thư mục này là lịch sử schema canonical của SLCS production.
 - Trước deploy production chạy `npm run validate:production`, sau đó `npm run db:migrate`.
 
 Runtime có cơ chế kiểm tra schema đại diện và repair database cũ/thiếu bằng installer hợp nhất, nhưng đây là lớp phục hồi; đường triển khai chuẩn vẫn là Wrangler migrations trước khi deploy.
+
+- 0027_exam_domain_split.sql — one-time launch and attempt-scoped access tokens for exam.skyfirst.io.vn.

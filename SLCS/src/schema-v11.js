@@ -380,4 +380,14 @@ export const V11_SCHEMA_STAGES = [
       "CREATE INDEX IF NOT EXISTS idx_assessment_incidents_attempt ON assessment_incidents(attempt_id,status);"
     ]
   }
+  ,{
+    "name": "0027_exam_domain_split",
+    "statements": [
+      "CREATE TABLE IF NOT EXISTS exam_launch_tokens (token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,attempt_id TEXT NOT NULL,expires_at TEXT NOT NULL,used_at TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);",
+      "CREATE INDEX IF NOT EXISTS idx_exam_launch_attempt ON exam_launch_tokens(attempt_id,expires_at);",
+      "CREATE TABLE IF NOT EXISTS exam_access_tokens (token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,attempt_id TEXT NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);",
+      "CREATE INDEX IF NOT EXISTS idx_exam_access_attempt ON exam_access_tokens(attempt_id,expires_at);"
+    ]
+  }
+
 ];

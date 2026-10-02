@@ -10,7 +10,8 @@
     "SESSION_DAYS": "30",
     "MAIL_FROM": "Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>",
     "REALTIME_APP_NAME": "skyfirsthoc",
-    "REALTIME_API_BASE": "https://rtc.live.cloudflare.com/v1"
+    "REALTIME_API_BASE": "https://rtc.live.cloudflare.com/v1",
+    "EXAM_URL": "https://exam.skyfirst.io.vn"
   },
   "d1_databases": [
     {

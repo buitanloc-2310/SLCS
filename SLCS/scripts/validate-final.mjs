@@ -16,6 +16,9 @@ const checks=[
  ['Assessment receipts runtime',/INSERT INTO assessment_receipts/.test(api)],
  ['Scoped grants runtime',/FROM scoped_role_grants/.test(api)],
  ['Private file organization scope',/x\.file_id=\? AND COALESCE\(x\.organization_id/.test(api)],
- ['Fresh DB migrations',migrationPass&&migrationCount===26&&migrationIntegrity==='ok'],['Canonical final UX',/FINAL UX CANONICAL LAYER/.test(css)]
+ ['Class organization isolation',/requireClassOrganizationAccess\(request,env,u,id\)/.test(api)&&/organization_members WHERE organization_id=\? AND user_id=\?/.test(api)],
+ ['Join code organization guard',/Lớp không thuộc tổ chức hiện tại/.test(api)&&/access_mode FROM class_settings/.test(api)],
+ ['Attendance starts unmarked',/status,marked_by\) VALUES\(\?,\?,'unmarked',NULL\)/.test(api)],
+ ['Fresh DB migrations',migrationPass&&migrationCount===28&&migrationIntegrity==='ok'],['Canonical final UX',/FINAL UX CANONICAL LAYER/.test(css)]
 ];
 let fail=0; for(const [n,ok] of checks){console.log(`${ok?'PASS':'FAIL'} ${n}`);if(!ok)fail++} console.log(`FINAL FEATURE PRESERVATION: ${checks.length-fail}/${checks.length}`); if(fail)process.exit(1);

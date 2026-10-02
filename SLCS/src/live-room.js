@@ -32,8 +32,9 @@ export class LiveRoom {
     }
     if (!access) return new Response('Phiên tham gia không hợp lệ.', { status: 401 });
 
-    await ensureV13Schema(this.env).catch(()=>{});
-    const settings = await getClassLiveSettings(this.env,classId).catch(()=>({waiting_room:0}));
+    try { await ensureV13Schema(this.env); } catch { return new Response('Không thể khởi tạo dữ liệu phòng học. Vui lòng thử lại.', { status: 503 }); }
+    let settings;
+    try { settings = await getClassLiveSettings(this.env,classId); } catch { return new Response('Không thể tải thiết lập phòng học. Vui lòng thử lại.', { status: 503 }); }
     const transport = url.searchParams.get('mode') === 'primary' ? 'sfu' : 'mesh';
     const role = String(access.role || 'guest').slice(0, 30);const isHost = ['teacher','assistant','school_admin','super_admin'].includes(role);const needsWaiting = !!Number(settings.waiting_room) && !isHost && !Number(access.admitted);
     let maxPeers = transport === 'sfu' ? 120 : 18;
@@ -47,10 +48,10 @@ export class LiveRoom {
         maxPeers = Math.max(4, Math.min(40, Number(row?.value || 18)));
       }
     } catch {}
-    try{const cls=await this.env.DB.prepare(`SELECT COALESCE(organization_id,'sky-first') organization_id FROM classes WHERE id=?`).bind(classId).first();const ent=await this.env.DB.prepare(`SELECT enabled,quota_value,expires_at FROM organization_entitlements WHERE organization_id=? AND capability='live.capacity'`).bind(cls?.organization_id||'sky-first').first();if(ent&&Number(ent.enabled)===0)return new Response('Tính năng lớp trực tuyến đang bị tắt cho tổ chức.',{status:403});if(ent?.expires_at&&Date.parse(ent.expires_at)<=Date.now())return new Response('Quyền sử dụng lớp trực tuyến đã hết hạn.',{status:403});if(ent?.quota_value!=null)maxPeers=Math.max(1,Math.min(maxPeers,Number(ent.quota_value)||maxPeers));}catch{}
+    try{const cls=await this.env.DB.prepare(`SELECT COALESCE(organization_id,'sky-first') organization_id FROM classes WHERE id=?`).bind(classId).first();if(!cls)return new Response('Không tìm thấy lớp học.',{status:404});const ent=await this.env.DB.prepare(`SELECT enabled,quota_value,expires_at FROM organization_entitlements WHERE organization_id=? AND capability='live.capacity'`).bind(cls.organization_id).first();if(ent&&Number(ent.enabled)===0)return new Response('Tính năng lớp trực tuyến đang bị tắt cho tổ chức.',{status:403});if(ent?.expires_at&&Date.parse(ent.expires_at)<=Date.now())return new Response('Quyền sử dụng lớp trực tuyến đã hết hạn.',{status:403});if(ent?.quota_value!=null)maxPeers=Math.max(1,Math.min(maxPeers,Number(ent.quota_value)||maxPeers));}catch{return new Response('Không thể xác minh quyền sử dụng phòng học. Vui lòng thử lại.',{status:503})}
     if (this.admittedClients().length >= maxPeers && !needsWaiting) return new Response('Phòng học đã đạt số người tham gia tối đa.', { status: 429 });
 
-    if(!needsWaiting&&!Number(access.admitted))await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(token,classId).run().catch(()=>{});
+    if(!needsWaiting&&!Number(access.admitted))await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(token,classId).run();
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     const peerId = crypto.randomUUID();
@@ -62,7 +63,7 @@ export class LiveRoom {
     if (needsWaiting) {
       server.send(JSON.stringify({ type:'waiting-state', status:'waiting', peerId, room:{classId,maxPeers} }));
       this.broadcastToHosts({type:'waiting-request',peer:{id:peerId,name,role}});
-      await logLiveEvent(this.env,classId,'waiting.request',access.user_id?`user:${access.user_id}`:`guest:${peerId}`,name,{role}).catch(()=>{});
+      await logLiveEvent(this.env,classId,'waiting.request',access.user_id?`user:${access.user_id}`:`guest:${peerId}`,name,{role});
     } else {
       this.sendWelcome(peerId,classId,maxPeers,transport);
       this.broadcast({ type: 'peer-joined', peer: { id: peerId, name, role } }, peerId);
@@ -71,7 +72,7 @@ export class LiveRoom {
         const waiting=[...this.clients.entries()].filter(([,p])=>!p.admitted).map(([id,p])=>({id,name:p.name,role:p.role}));
         if(waiting.length) server.send(JSON.stringify({type:'waiting-list',waiting}));
       }
-      await logLiveEvent(this.env,classId,'peer.joined',access.user_id?`user:${access.user_id}`:`guest:${peerId}`,name,{role,transport}).catch(()=>{});
+      await logLiveEvent(this.env,classId,'peer.joined',access.user_id?`user:${access.user_id}`:`guest:${peerId}`,name,{role,transport});
     }
 
     server.addEventListener('message', evt => this.onMessage({evt,peerId,classId,name,role,maxPeers,transport}));
@@ -111,7 +112,9 @@ export class LiveRoom {
     const roomSettings=sender.settings||{};
     if(!host){
       if(msg.type==='chat'&&!Number(roomSettings.allow_chat))return;
-      if(['reaction','raise-hand','lower-hand','class-pulse'].includes(msg.type)&&!Number(roomSettings.allow_reactions))return;
+      if(msg.type==='reaction'&&!Number(roomSettings.allow_reactions))return;
+      if(['raise-hand','lower-hand'].includes(msg.type)&&!Number(roomSettings.allow_hand_raise))return;
+      if(msg.type==='class-pulse'&&!Number(roomSettings.allow_class_pulse))return;
       if(msg.type==='media-state'&&msg.source==='mic'&&!Number(roomSettings.allow_student_mic))return;
       if(msg.type==='media-state'&&msg.source==='camera'&&!Number(roomSettings.allow_student_camera))return;
     }
@@ -120,16 +123,16 @@ export class LiveRoom {
       if(!host)return;
       const action=String(msg.action||'').slice(0,40), target=String(msg.target||'').slice(0,80);
       if(action==='admit' && target && this.clients.has(target)){
-        if(this.admittedClients().length>=maxPeers){try{sender.ws.send(JSON.stringify({type:'host-command',action:'admit-failed',reason:'capacity'}))}catch{};return;}const p=this.clients.get(target); if(!p.admitted){p.admitted=true;await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(p.token,classId).run().catch(()=>{});this.sendWelcome(target,classId,maxPeers,transport);this.broadcast({type:'peer-joined',peer:{id:target,name:p.name,role:p.role}},target);this.broadcastRoster();this.broadcastToHosts({type:'waiting-left',peerId:target});await logLiveEvent(this.env,classId,'waiting.admitted',`peer:${peerId}`,name,{target,target_name:p.name}).catch(()=>{});} return;
+        if(this.admittedClients().length>=maxPeers){try{sender.ws.send(JSON.stringify({type:'host-command',action:'admit-failed',reason:'capacity'}))}catch{};return;}const p=this.clients.get(target); if(!p.admitted){p.admitted=true;await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(p.token,classId).run();this.sendWelcome(target,classId,maxPeers,transport);this.broadcast({type:'peer-joined',peer:{id:target,name:p.name,role:p.role}},target);this.broadcastRoster();this.broadcastToHosts({type:'waiting-left',peerId:target});await logLiveEvent(this.env,classId,'waiting.admitted',`peer:${peerId}`,name,{target,target_name:p.name});} return;
       }
       if(action==='admit-all'){
-        for(const [id,p] of [...this.clients.entries()]) if(!p.admitted&&this.admittedClients().length<maxPeers){p.admitted=true;await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(p.token,classId).run().catch(()=>{});this.sendWelcome(id,classId,maxPeers,transport);this.broadcast({type:'peer-joined',peer:{id,name:p.name,role:p.role}},id);} this.broadcastRoster(); this.broadcastToHosts({type:'waiting-list',waiting:[]}); return;
+        for(const [id,p] of [...this.clients.entries()]) if(!p.admitted&&this.admittedClients().length<maxPeers){p.admitted=true;await this.env.DB.prepare(`UPDATE live_access_tokens SET admitted=1 WHERE token=? AND class_id=?`).bind(p.token,classId).run();this.sendWelcome(id,classId,maxPeers,transport);this.broadcast({type:'peer-joined',peer:{id,name:p.name,role:p.role}},id);} this.broadcastRoster(); this.broadcastToHosts({type:'waiting-list',waiting:[]}); return;
       }
       if(action==='remove' && target && this.clients.has(target)){try{this.clients.get(target).ws.send(JSON.stringify({type:'host-command',action:'removed',from:peerId,fromName:name}));this.clients.get(target).ws.close(4001,'removed')}catch{};return;}
       if(action==='policy'){
         const incoming=msg.settings&&typeof msg.settings==='object'?msg.settings:{};
         const policy={};
-        for(const k of ['allow_student_mic','allow_student_camera','allow_student_share','allow_chat','allow_reactions','allow_anonymous_pulse','adaptive_video']) if(k in incoming) policy[k]=incoming[k]?1:0;
+        for(const k of ['allow_student_mic','allow_student_camera','allow_student_share','allow_chat','allow_reactions','allow_hand_raise','allow_class_pulse','allow_anonymous_pulse','adaptive_video']) if(k in incoming) policy[k]=incoming[k]?1:0;
         for(const [,p] of this.clients) p.settings={...(p.settings||{}),...policy};
         this.broadcast({type:'host-command',action:'policy',settings:policy,from:peerId,fromName:name,fromRole:role},peerId);
         return;

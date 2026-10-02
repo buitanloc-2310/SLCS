@@ -7,6 +7,8 @@ export const V13_DEFAULTS = {
   allow_student_share: 0,
   allow_chat: 1,
   allow_reactions: 1,
+  allow_hand_raise: 1,
+  allow_class_pulse: 1,
   allow_anonymous_pulse: 1,
   theme: 'sky',
   accent: '#4263eb',
@@ -30,6 +32,8 @@ export async function ensureV13Schema(env) {
       allow_student_share INTEGER NOT NULL DEFAULT 0,
       allow_chat INTEGER NOT NULL DEFAULT 1,
       allow_reactions INTEGER NOT NULL DEFAULT 1,
+      allow_hand_raise INTEGER NOT NULL DEFAULT 1,
+      allow_class_pulse INTEGER NOT NULL DEFAULT 1,
       allow_anonymous_pulse INTEGER NOT NULL DEFAULT 1,
       theme TEXT NOT NULL DEFAULT 'sky',
       accent TEXT NOT NULL DEFAULT '#4263eb',
@@ -109,6 +113,11 @@ export async function ensureV13Schema(env) {
     )`
   ];
   for (const statement of sql) await env.DB.prepare(statement).run();
+  // Backfill columns for databases created before independent teaching controls existed.
+  const liveCols = await env.DB.prepare(`PRAGMA table_info(class_live_settings)`).all();
+  const liveNames = new Set((liveCols.results || []).map(x => x.name));
+  if (!liveNames.has('allow_hand_raise')) await env.DB.prepare(`ALTER TABLE class_live_settings ADD COLUMN allow_hand_raise INTEGER NOT NULL DEFAULT 1`).run();
+  if (!liveNames.has('allow_class_pulse')) await env.DB.prepare(`ALTER TABLE class_live_settings ADD COLUMN allow_class_pulse INTEGER NOT NULL DEFAULT 1`).run();
   ready = true;
 }
 
@@ -128,8 +137,6 @@ export function safeJson(value, fallback) {
 
 export async function logLiveEvent(env, classId, eventType, actorKey='', actorName='', detail={}) {
   await ensureV13Schema(env);
-  try {
-    await env.DB.prepare(`INSERT INTO live_room_events(id,class_id,event_type,actor_key,actor_name,detail_json,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)`)
-      .bind(crypto.randomUUID(), classId, eventType, actorKey || null, actorName || '', JSON.stringify(detail || {})).run();
-  } catch {}
+  await env.DB.prepare(`INSERT INTO live_room_events(id,class_id,event_type,actor_key,actor_name,detail_json,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)`)
+    .bind(crypto.randomUUID(), classId, eventType, actorKey || null, actorName || '', JSON.stringify(detail || {})).run();
 }

@@ -11,7 +11,7 @@ const checks=[
  ['fresh installer includes website studio migration',schema.includes('0019_website_studio_v38')],
  ['fresh installer includes operations migration',schema.includes('0020_operations_v39')],
  ['installer tolerates already-applied ADD COLUMN',api.includes('duplicate column name')],
- ['admin class access fallback',api.includes("['school_admin','super_admin'].includes(admin.role)")],
+ ['admin class access fallback',api.includes("admin?.role==='super_admin'")&&api.includes("admin?.role==='school_admin'")&&api.includes('organization_members WHERE organization_id=? AND user_id=?')],
  ['safeHttpUrl still defined',app.indexOf('function safeHttpUrl(')>=0&&app.indexOf('function safeHttpUrl(')<app.indexOf('function footer(')],
  ['repair cache bust',(read('public/index.html').includes('/app.js?v=40.0.1')&&app.includes('/ui-system.js?v=40.0.1'))||(read('public/index.html').includes('/app.js?build=20261001-final-hardening')&&app.includes('/ui-system.js?build=20261001-final-hardening'))]
 ];

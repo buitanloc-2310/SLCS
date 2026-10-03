@@ -389,6 +389,11 @@ async function productionSchemaLooksReady(env){
     // generic 500 / Request ID instead of reconciling the schema.
     await env.DB.prepare(`SELECT assessment_type,time_limit_enabled,public_access,public_token,hide_schedule,require_email_verify,shuffle_questions,shuffle_options,updated_at,version_no,blueprint_json,result_policy,scope_level FROM exams LIMIT 0`).all();
     await env.DB.prepare(`SELECT access_key,full_name,email,candidate_code,class_name,status,answers_json,event_log_json,question_snapshot_json,extra_time_minutes,invalidated_at FROM exam_guest_attempts LIMIT 0`).all();
+    // Exam-domain split is part of the production schema too. A database that
+    // predates migration 0027 must be repaired before Start/Resume tries to
+    // create a launch token; otherwise the UI only sees a generic HTTP 500.
+    await env.DB.prepare(`SELECT token_hash,user_id,attempt_id,expires_at,used_at FROM exam_launch_tokens LIMIT 0`).all();
+    await env.DB.prepare(`SELECT token_hash,user_id,attempt_id,expires_at FROM exam_access_tokens LIMIT 0`).all();
     await env.DB.prepare(`SELECT published FROM assignments LIMIT 0`).all();
     await env.DB.prepare(`SELECT submission_count FROM submissions LIMIT 0`).all();
     await env.DB.prepare(`SELECT admitted FROM live_access_tokens LIMIT 0`).all();

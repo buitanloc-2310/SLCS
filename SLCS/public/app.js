@@ -1,11 +1,9 @@
 import {installUiRuntime,syncUiContext} from '/ui-system.js?build=20261001-final-hardening';
 installUiRuntime();
-let _classroomModulePromise=null,_mediaModulePromise=null,_beautyModulePromise=null,_qrPromise=null;
+let _classroomModulePromise=null,_qrPromise=null;
 document.documentElement.dataset.theme='light';
 document.documentElement.dataset.themeMode='light';
 const loadClassroomModule=()=>_classroomModulePromise||=import('/classroom/classroom-plus.js?build=20261001-final-hardening');
-const loadMediaModule=()=>_mediaModulePromise||=import('/classroom/media-client.js?build=20261001-final-hardening');
-const loadBeautyModule=()=>_beautyModulePromise||=import('/classroom/beauty-engine.js?build=20261001-final-hardening');
 const loadQrLibrary=()=>{if(window.SLCQRCode)return Promise.resolve(window.SLCQRCode);if(_qrPromise)return _qrPromise;_qrPromise=new Promise((resolve,reject)=>{const x=document.createElement('script');x.src='/vendor/slc-qrcode.js?build=20261001-final-hardening';x.async=true;x.onload=()=>window.SLCQRCode?resolve(window.SLCQRCode):reject(new Error('QR_INIT_FAILED'));x.onerror=()=>reject(new Error('QR_LOAD_FAILED'));document.head.appendChild(x)});return _qrPromise};
 const $ = (q,root=document)=>root.querySelector(q);
 const app=$('#app');
@@ -223,7 +221,8 @@ async function resumeExam(attemptId){try{await launchExamDomain(attemptId)}catch
 function guestLiveEntry(classId){app.innerHTML=shell(`<div class="auth-wrap"><form class="auth-card" id="guestLiveForm"><div class="eyebrow">THAM GIA PHÒNG HỌC</div><h1>Vào lớp với tư cách khách</h1><p class="muted">Bạn không cần tài khoản SFN để tham gia khi lớp cho phép khách. Micro và camera vẫn tắt mặc định.</p><div class="field"><label>Tên hiển thị</label><input name="name" minlength="2" maxlength="80" required placeholder="Họ và tên"></div><div id="msg"></div><button class="btn primary" style="width:100%">Tham gia phòng học</button></form></div>`);bindNav();$('#guestLiveForm').onsubmit=async e=>{e.preventDefault();const name=text(new FormData(e.target).get('name'));try{await liveRoom(classId,name)}catch(x){$('#msg').innerHTML=`<div class="notice bad">${esc(x.message)}</div>`}}}
 
 async function liveRoom(classId,guestName=null){
-  const [{runClassroomPrejoin,mountClassroomVPLUS},{SkyMediaClient}]=await Promise.all([loadClassroomModule(),loadMediaModule()]);
+  const {runClassroomPrejoin,mountClassroomVPLUS}=await loadClassroomModule();
+  const SkyMediaClient=null;
   let d,access,displayName,leaveTarget;
   // P0: chỉ lấy metadata trước pre-join. Access token được cấp NGAY KHI người dùng thật sự bấm Tham gia.
   if(guestName){
@@ -247,7 +246,7 @@ async function liveRoom(classId,guestName=null){
   access=guestName
     ? await api(`/api/public/live/${classId}/guest-token`,{method:'POST',body:JSON.stringify({name:guestName})})
     : await api('/api/live/access-token',{method:'POST',body:JSON.stringify({class_id:classId})});
-  const mediaInfo=await api('/api/live/media/status',{method:'POST',body:JSON.stringify({class_id:classId,access_token:access.token})}).catch((e)=>{console.warn('[P0][MEDIA_STATUS_FAILED]',e?.message||e);return {configured:false}});
+  const mediaInfo={configured:false,signaling_transport:'websocket',transport:'disabled'};
   let sfuMode=false;
   const sfuConfigured=mediaInfo?.configured===true;
   const signalingTransport=mediaInfo?.signaling_transport==='pages-d1'?'pages-d1':'websocket';
@@ -476,7 +475,8 @@ async function liveRoom(classId,guestName=null){
   }
   async function applyBeauty({republish=true}={}){
     if(!beautyAllowed||!$('#beautyEnabled')?.checked||!camTrack||camTrack.readyState!=='live'){if(beautyTrack)await stopBeauty({restorePublish:republish});return camTrack}
-    const {BeautyEngine}=await loadBeautyModule();try{beautyTrack?.stop?.()}catch{};try{beautyEngine?.destroy?.()}catch{};beautyEngine=new BeautyEngine(beautyConfigFromUi());beautyTrack=await beautyEngine.processVideoTrack(camTrack,{fps:30});beautyTrack.enabled=camTrack.enabled;
+    throw new Error('Tính năng camera đã được gỡ khỏi SLCS.');
+    const {BeautyEngine}=await Promise.resolve({});try{beautyTrack?.stop?.()}catch{};try{beautyEngine?.destroy?.()}catch{};beautyEngine=new BeautyEngine(beautyConfigFromUi());beautyTrack=await beautyEngine.processVideoTrack(camTrack,{fps:30});beautyTrack.enabled=camTrack.enabled;
     if(!screenTrack)localVideo.srcObject=new MediaStream([beautyTrack]);
     if(republish&&sfuMode)await publishSfu(beautyTrack,'camera');
     const st=$('#beautyState');if(st)st.textContent='Beauty đang áp dụng cho camera gửi đi.';return beautyTrack

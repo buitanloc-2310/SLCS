@@ -1,5 +1,6 @@
 import { LiveRoom } from './live-room.js';
 import { V11_SCHEMA_STAGES } from './schema-v11.js';
+import { realtimeSfuConfig, createRealtimeSession, addRealtimeTracks, renegotiateRealtimeSession, closeRealtimeTracks, ensureRealtimeSfuSchema } from './realtime-sfu.js';
 import { ensureV13Schema, getClassLiveSettings, safeJson, logLiveEvent } from './v13-platform.js';
 import { ensureVPlusSchema, recordPlatformEvent, requirePermission, safeUserMessage } from './vplus-platform.js';
 export { LiveRoom };
@@ -1202,7 +1203,91 @@ async function routeApi(request, env, ctx, url) {
     const classId=guestCatchup[1],access=await requireLiveAccess(env,classId,url.searchParams.get('token'));await requireLiveAdmission(env,classId,access);const mins=Math.max(1,Math.min(30,Number(url.searchParams.get('minutes')||5))),rows=await env.DB.prepare(`SELECT event_type,actor_name,detail_json,created_at FROM live_room_events WHERE class_id=? AND datetime(created_at)>=datetime('now',?) ORDER BY created_at DESC LIMIT 40`).bind(classId,`-${mins} minutes`).all();return ok({events:(rows.results||[]).map(x=>({...x,detail:safeJson(x.detail_json,{})}))});
   }
 
-  // Audio/video transport endpoints removed. Live room discussion/presence APIs remain below.
+  if(path==='/api/live/media/status' && method==='POST'){
+    const b=await request.json(); const classId=str(b.class_id); await requireLiveAccess(env,classId,b.access_token);
+    const cfg=realtimeSfuConfig(env);
+    return ok({configured:cfg.configured,transport:'runtime-handshake',signaling_transport:env.LIVE_ROOM?'websocket':'pages-d1'});
+  }
+
+  if(path==='/api/live/media/session/new' && method==='POST'){
+    const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token);
+    await ensureRealtimeSfuSchema(env);
+    const session=await createRealtimeSession(env);
+    if(!session?.sessionId)return bad('Chưa thể thiết lập kết nối hình ảnh và âm thanh. Vui lòng thử lại.',502);
+    await env.DB.prepare(`INSERT INTO live_sfu_sessions(session_id,class_id,owner_key,owner_name,role,status,created_at,last_seen) VALUES(?,?,?,?,?,'active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(session_id) DO UPDATE SET class_id=excluded.class_id,owner_key=excluded.owner_key,owner_name=excluded.owner_name,role=excluded.role,status='active',last_seen=CURRENT_TIMESTAMP`).bind(session.sessionId,classId,access.owner_key,access.display_name,access.role||'student').run();
+    return ok({session_id:session.sessionId});
+  }
+
+  const sfuTracks=path.match(/^\/api\/live\/media\/session\/([^/]+)\/tracks$/);
+  if(sfuTracks && method==='POST'){
+    const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token);await requireLiveAdmission(env,classId,access); const sessionId=sfuTracks[1];
+    await requireOwnedSfuSession(env,sessionId,classId,access);
+    const op=b.operation==='subscribe'?'subscribe':'publish'; const tracks=Array.isArray(b.tracks)?b.tracks.slice(0,64):[];
+    if(!tracks.length)return bad('Không có dữ liệu âm thanh hoặc hình ảnh để xử lý.');
+    if(op==='publish'){
+      const liveSettings=await getClassLiveSettings(env,classId); const isHost=['teacher','assistant','school_admin','super_admin'].includes(access.role);
+      if(!isHost&&liveSettings){
+        for(const t of tracks){const source=str(t.source||t.kind);if(source==='mic'&&!Number(liveSettings.allow_student_mic))return bad('Giáo viên đang khóa micro của học viên.',403);if(source==='camera'&&!Number(liveSettings.allow_student_camera))return bad('Giáo viên đang khóa camera của học viên.',403);if(source==='screen'&&!Number(liveSettings.allow_student_share))return bad('Bạn chưa được phép chia sẻ màn hình.',403);}
+      }
+      if(tracks.some(t=>t.location!=='local'))return bad('Dữ liệu gửi lên không hợp lệ.');
+      if(tracks.length>4)return bad('Có quá nhiều luồng thiết bị được bật cùng lúc.');
+      for(const t of tracks){if(!str(t.trackName)||!['audio','video'].includes(str(t.kind)))return bad('Dữ liệu thiết bị không hợp lệ.');}
+    }else{
+      if(tracks.some(t=>t.location!=='remote'||!str(t.sessionId)||!str(t.trackName)))return bad('Dữ liệu nhận từ phòng học không hợp lệ.');
+      for(const t of tracks){
+        const allowed=await env.DB.prepare(`SELECT 1 ok FROM live_sfu_tracks WHERE class_id=? AND session_id=? AND track_name=? AND active=1 LIMIT 1`).bind(classId,str(t.sessionId),str(t.trackName)).first();
+        if(!allowed)return bad('Nội dung này không còn khả dụng trong phòng học.',403);
+      }
+    }
+    const payload={tracks:tracks.map(t=>op==='publish'?{location:'local',mid:t.mid,trackName:str(t.trackName)}:{location:'remote',sessionId:str(t.sessionId),trackName:str(t.trackName)})};
+    if(b.sessionDescription?.sdp&&b.sessionDescription?.type)payload.sessionDescription={type:str(b.sessionDescription.type),sdp:String(b.sessionDescription.sdp)};
+    const result=await addRealtimeTracks(env,sessionId,payload);
+    const trackFailures=(result.tracks||[]).filter(t=>t?.errorCode);if(trackFailures.length)return bad(trackFailures[0].errorDescription||'Cloudflare Realtime không thể xử lý luồng media.',502,{code:trackFailures[0].errorCode||'REALTIME_TRACK_ERROR',failures:trackFailures.map(t=>({trackName:t.trackName||'',errorCode:t.errorCode||'',errorDescription:t.errorDescription||''}))});
+    if(op==='publish'){
+      const byName=new Map(tracks.map(t=>[str(t.trackName),t]));
+      for(const rt of result.tracks||[]){
+        const input=byName.get(str(rt.trackName))||tracks[0]; const id=crypto.randomUUID();
+        await env.DB.prepare(`INSERT INTO live_sfu_tracks(id,class_id,session_id,track_name,mid,kind,source,owner_key,owner_name,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(session_id,track_name) DO UPDATE SET mid=excluded.mid,kind=excluded.kind,source=excluded.source,owner_name=excluded.owner_name,role=excluded.role,active=1,updated_at=CURRENT_TIMESTAMP`).bind(id,classId,sessionId,str(rt.trackName||input.trackName),str(rt.mid??input.mid??''),str(input.kind),str(input.source||input.kind),access.owner_key,access.display_name,access.role||'student').run();
+      }
+    }
+    return ok({...result});
+  }
+
+  const sfuRenegotiate=path.match(/^\/api\/live\/media\/session\/([^/]+)\/renegotiate$/);
+  if(sfuRenegotiate && method==='PUT'){
+    const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token); const sessionId=sfuRenegotiate[1]; await requireOwnedSfuSession(env,sessionId,classId,access);
+    if(!b.sessionDescription?.sdp||!b.sessionDescription?.type)return bad('Chưa thể khôi phục kết nối. Vui lòng thử lại.',400);
+    const result=await renegotiateRealtimeSession(env,sessionId,{sessionDescription:{type:str(b.sessionDescription.type),sdp:String(b.sessionDescription.sdp)}}); return ok({...result});
+  }
+
+  const sfuHeartbeat=path.match(/^\/api\/live\/media\/session\/([^/]+)\/heartbeat$/);
+  if(sfuHeartbeat && method==='POST'){
+    const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token); const sessionId=sfuHeartbeat[1]; await requireOwnedSfuSession(env,sessionId,classId,access);
+    await env.DB.prepare(`UPDATE live_sfu_sessions SET last_seen=CURRENT_TIMESTAMP WHERE session_id=? AND class_id=? AND owner_key=? AND status='active'`).bind(sessionId,classId,access.owner_key).run(); return ok();
+  }
+
+  const sfuUnpublish=path.match(/^\/api\/live\/media\/session\/([^/]+)\/unpublish$/);
+  if(sfuUnpublish && method==='POST'){
+    const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token); const sessionId=sfuUnpublish[1]; await requireOwnedSfuSession(env,sessionId,classId,access);
+    const name=str(b.track_name); const row=await env.DB.prepare(`SELECT track_name,mid FROM live_sfu_tracks WHERE class_id=? AND session_id=? AND track_name=? AND owner_key=? AND active=1 LIMIT 1`).bind(classId,sessionId,name,access.owner_key).first();
+    if(row){try{await closeRealtimeTracks(env,sessionId,[{trackName:row.track_name,mid:row.mid}])}catch(e){console.warn('[live media] close track failed',e?.code||e?.message||e)}}
+    await env.DB.prepare(`UPDATE live_sfu_tracks SET active=0,updated_at=CURRENT_TIMESTAMP WHERE class_id=? AND session_id=? AND track_name=? AND owner_key=?`).bind(classId,sessionId,name,access.owner_key).run(); return ok();
+  }
+
+  const sfuEnd=path.match(/^\/api\/live\/media\/session\/([^/]+)\/end$/);
+  if(sfuEnd && method==='POST'){
+    const b=await request.json(); const classId=str(b.class_id); const access=await requireLiveAccess(env,classId,b.access_token); const sessionId=sfuEnd[1]; await requireOwnedSfuSession(env,sessionId,classId,access);
+    const active=await env.DB.prepare(`SELECT track_name,mid FROM live_sfu_tracks WHERE session_id=? AND active=1`).bind(sessionId).all();
+    if(active.results?.length){try{await closeRealtimeTracks(env,sessionId,active.results.map(x=>({trackName:x.track_name,mid:x.mid})))}catch(e){console.warn('[live media] close session tracks failed',e?.code||e?.message||e)}}
+    await env.DB.batch([env.DB.prepare(`UPDATE live_sfu_sessions SET status='ended',ended_at=CURRENT_TIMESTAMP,last_seen=CURRENT_TIMESTAMP WHERE session_id=?`).bind(sessionId),env.DB.prepare(`UPDATE live_sfu_tracks SET active=0,updated_at=CURRENT_TIMESTAMP WHERE session_id=?`).bind(sessionId)]); return ok();
+  }
+
+  if(path==='/api/live/media/room-tracks' && method==='POST'){
+    const b=await request.json(); const classId=str(b.class_id);const access=await requireLiveAccess(env,classId,b.access_token);await requireLiveAdmission(env,classId,access); await ensureRealtimeSfuSchema(env);
+    const excludeSessionId=str(b.exclude_session_id);
+    const sql=`SELECT t.session_id,t.track_name,t.mid,t.kind,t.source,t.owner_key,t.owner_name,t.role,t.updated_at FROM live_sfu_tracks t JOIN live_sfu_sessions s ON s.session_id=t.session_id WHERE t.class_id=? AND t.active=1 AND s.status='active' ${excludeSessionId?'AND t.session_id!=? ':''}AND datetime(s.last_seen)>datetime('now','-30 seconds') ORDER BY t.updated_at DESC LIMIT 500`;
+    const stmt=env.DB.prepare(sql); const rows=excludeSessionId?await stmt.bind(classId,excludeSessionId).all():await stmt.bind(classId).all(); return ok({tracks:rows.results||[]});
+  }
 
   if(path==='/api/support/tickets' && method==='GET'){
     const u=await requireUser(request,env); const rows=await env.DB.prepare(`SELECT * FROM support_tickets WHERE requester_user_id=? ORDER BY created_at DESC`).bind(u.user_id).all(); return ok({tickets:rows.results});

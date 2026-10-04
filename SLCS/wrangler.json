@@ -6,9 +6,9 @@
   "vars": {
     "APP_URL": "https://slc.skyfirst.io.vn",
     "SUPPORT_EMAIL": "support@skyfirst.io.vn",
-    "APP_NAME": "Trung tâm Học tập Số Sky First Network",
+    "APP_NAME": "Trung tâm Học tập Số Sky First",
     "SESSION_DAYS": "30",
-    "MAIL_FROM": "Trung tâm Học tập Số Sky First Network <slc@skyfirst.io.vn>",
+    "MAIL_FROM": "Trung tâm Học tập Số Sky First <slc@skyfirst.io.vn>",
     "EXAM_URL": "https://exam.skyfirst.io.vn"
   },
   "d1_databases": [

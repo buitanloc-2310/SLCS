@@ -8,7 +8,7 @@ const api=read('src/index.js');
 const schema=read('src/schema-v11.js');
 const pkg=JSON.parse(read('package.json'));
 const migrations=fs.readdirSync('migrations').filter(x=>/^\d+.*\.sql$/.test(x)).sort();
-const sourceRuntime=[app,api,read('src/v13-platform.js'),read('src/vplus-platform.js')].join('\n');
+const sourceRuntime=[app,api,read('src/vplus-platform.js')].join('\n');
 const build=(idx.match(/app\.js\?build=([^"']+)/)||[])[1]||'';
 
 const checks=[];
@@ -35,6 +35,8 @@ check('operations/IAM present',api.includes('/api/admin/v39/roles')&&api.include
 check('video/live classroom runtime absent',!sourceRuntime.includes('getUserMedia')&&!sourceRuntime.includes('RTCPeerConnection')&&!sourceRuntime.includes('/api/live/')&&!sourceRuntime.includes('/api/public/live/')&&!sourceRuntime.includes('LiveRoom')&&!sourceRuntime.includes('realtimeSfu'));
 check('camera/mic/screen permissions denied',api.includes("permissions-policy':'camera=(), microphone=(), display-capture=(), geolocation=()"));
 check('removed classroom assets absent',!fs.existsSync('public/classroom')&&!fs.existsSync('public/join.html')&&!fs.existsSync('src/live-room.js')&&!fs.existsSync('src/realtime-sfu.js'));
+check('retired video settings and UI absent',!sourceRuntime.match(/allow_guest_live|live_room_max_participants|live_mesh_max_peers|beauty_(enabled|owner|smooth|brightness|contrast|background|advanced)|School Studio|token phòng học/i));
+check('learning analytics no longer depends on live telemetry',!api.match(/live_attendance|live_room_events|live_polls/));
 check('footer labels hide raw URLs',app.includes("link('ctt','Cổng thông tin'")&&app.includes("link('zalo','Zalo / Hotline'")&&(app.includes('>${esc(text)}</a>')||app.includes('>${esc(labelText)}</a>')));
 check('runtime AI endpoints absent',!sourceRuntime.includes('/api/ai')&&!sourceRuntime.toLowerCase().includes('sky first ai')&&!sourceRuntime.includes('OPENAI_API_KEY')&&!sourceRuntime.includes('AI_API_KEY'));
 check('legacy AI storage only appears as DROP migration',!app.match(/ai_(messages|conversations|audit|action_requests|rate_limits)/)&&!api.match(/ai_(messages|conversations|audit|action_requests|rate_limits)/));

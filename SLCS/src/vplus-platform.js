@@ -1,7 +1,7 @@
 const schemaReadyByDb = new WeakSet();
 
 export const VPLUS = Object.freeze({
-  product: 'Sky First School',
+  product: 'Sky First Learning Center',
   channel: 'VPLUS',
   edition: 'VIP PRO'
 });
@@ -37,7 +37,7 @@ export function safeUserMessage(error, fallback='Đã xảy ra sự cố tạm t
   if(status===429) return 'Có quá nhiều yêu cầu cùng lúc. Vui lòng thử lại sau ít phút.';
   if(status>=500) return fallback;
   const msg=String(error?.publicMessage||error?.message||'').trim();
-  if(!msg || /\b(D1|R2|SFU|mesh|durable|worker|websocket|ICE|binding|schema|SQL|API|HTTP)\b/i.test(msg)) return fallback;
+  if(!msg || /\b(D1|R2|durable|worker|websocket|binding|schema|SQL|API|HTTP)\b/i.test(msg)) return fallback;
   return msg.slice(0,400);
 }
 

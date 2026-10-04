@@ -309,7 +309,7 @@ async function liveRoom(classId,guestName=null){
   
 
   const localStream=new MediaStream(); let micTrack=null,camTrack=null,beautyTrack=null,beautyEngine=null,screenTrack=null,screenPublishedMeta=null,audioCtx=null,audioRAF=null,currentFacing='user';
-  const peers=new Map(), peerMeta=new Map(), remoteSfuStreams=new Map(), remotePeerStreams=new Map(), pendingPeerIce=new Map(); const remoteMissingPolls=new Map(); let selfPeerId='',ws=null,wsOnline=false,closing=false,chatPoll=null,sfuTrackPoll=null,sfuHeartbeat=null,fallbackPoll=null,fallbackActive=false,fallbackAfter=0,fallbackPrimed=false,fallbackSelfKey='',lastHttpChatKey='',sfu=null,classroomTools=null,reconnectAttempt=0,initialMediaApplied=false,meshAdaptiveTimer=null;
+  const peers=new Map(), peerMeta=new Map(), remoteSfuStreams=new Map(), remotePeerStreams=new Map(), pendingPeerIce=new Map(); const remoteMissingPolls=new Map(); let selfPeerId='',ws=null,wsOnline=false,closing=false,chatPoll=null,sfuTrackPoll=null,sfuHeartbeat=null,fallbackPoll=null,fallbackActive=false,fallbackAfter=0,fallbackPrimed=false,fallbackSelfKey='',lastHttpChatKey='',sfu=null,classroomTools=null,reconnectAttempt=0,initialMediaApplied=false,meshAdaptiveTimer=null,sfuMediaFailures=0,sfuFallbackInProgress=false;
   const localVideo=$('#localVideo'),placeholder=$('#localPlaceholder'); localVideo.srcObject=localStream;
   const wsProto=location.protocol==='https:'?'wss':'ws';
   const hasMedia=!!navigator.mediaDevices?.getUserMedia;
@@ -386,8 +386,29 @@ async function liveRoom(classId,guestName=null){
     track.onunmute=()=>entry.tile.querySelector('.remote-fallback')?.classList.add('hidden');
     track.onended=()=>{try{entry.stream.removeTrack(track)}catch{};if(track.kind==='video'){const video=entry.tile.querySelector('video.remote-video');if(video?.srcObject?.getTracks().some(t=>t.id===track.id))video.srcObject=null}else if(track.kind==='audio'){const audio=entry.tile.querySelector('audio.remote-audio');if(audio?.srcObject?.getTracks().some(t=>t.id===track.id))audio.srcObject=null}if(!entry.stream.getTracks().some(t=>t.readyState==='live')){if(entry.ownsTile)entry.tile.remove();else entry.tile.querySelector('.remote-fallback')?.classList.remove('hidden');remoteSfuStreams.delete(key);syncPresentationStage()}};
   }
+  async function switchMediaToP2P(reason=''){
+    if(!sfuMode||sfuFallbackInProgress||closing)return false;
+    sfuFallbackInProgress=true;
+    console.warn('[SLC Live] Chuyển media sang kết nối tương thích',reason||'SFU_UNAVAILABLE');
+    setNotice('Kết nối media chính chưa ổn định. Hệ thống đang chuyển sang kết nối tương thích…','warn');
+    clearInterval(sfuTrackPoll);sfuTrackPoll=null;clearInterval(sfuHeartbeat);sfuHeartbeat=null;
+    try{await sfu?.close()}catch(e){console.warn('[SLC Live] close SFU before fallback',e)}
+    sfu=null;sfuMode=false;mediaTransportState='P2P_FALLBACK';sfuMediaFailures=0;
+    for(const [key,entry] of [...remoteSfuStreams]){try{entry.stream?.getTracks().forEach(t=>t.stop?.())}catch{};if(entry.ownsTile)entry.tile?.remove();else entry.tile?.querySelector?.('.remote-fallback')?.classList.remove('hidden');remoteSfuStreams.delete(key)}
+    for(const [id,p] of peerMeta){try{await ensurePeer(id,shouldInitiatePeer(id),p)}catch(e){console.warn('[SLC Live] P2P fallback peer',id,e)}}
+    try{await syncAllPeers()}catch(e){console.warn('[SLC Live] P2P fallback sync',e)}
+    setAdaptiveVideo(Number(classroomData.settings?.adaptive_video??1)!==0,Number(classroomData.settings?.max_visible_videos||12));
+    setConnection('Kết nối tương thích',false);sfuFallbackInProgress=false;return true;
+  }
+  function noteSfuMediaFailure(reason=''){
+    if(!sfuMode||closing)return;
+    sfuMediaFailures++;
+    if(sfuMediaFailures>=3)switchMediaToP2P(reason||'SFU_MEDIA_FAILURE').catch(e=>console.warn('[SLC Live] fallback failed',e));
+  }
+  function noteSfuMediaSuccess(){sfuMediaFailures=0}
+
   async function publishSfu(track,source){
-    if(!sfuMode)return null;if(!sfu)throw new Error('Kết nối lớp đang được chuẩn bị. Vui lòng thử lại sau giây lát.');const meta=await sfu.publishTrack(track,source);
+    if(!sfuMode)return null;if(!sfu)throw new Error('Kết nối lớp đang được chuẩn bị. Vui lòng thử lại sau giây lát.');const meta=await sfu.publishTrack(track,source);noteSfuMediaSuccess();
     if(wsOnline||fallbackActive)sendRealtime({type:'media-track-published',...meta,ownerName:displayName});
     return meta;
   }
@@ -401,8 +422,9 @@ async function liveRoom(classId,guestName=null){
         if(t.session_id===sfu.sessionId)continue;
         const key=mediaKey({sessionId:t.session_id,source:t.source});activeMediaKeys.add(key);remoteMissingPolls.delete(key);
         try{await sfu.subscribe({sessionId:t.session_id,trackName:t.track_name,kind:t.kind,source:t.source,ownerName:t.owner_name,ownerKey:t.owner_key,role:t.role})}
-        catch(e){console.warn('[SLC Live] Không nhận được remote track',t.track_name,e);setNotice('Một luồng âm thanh/hình ảnh chưa kết nối được. Hệ thống sẽ tiếp tục thử.','warn')}
+        catch(e){console.warn('[SLC Live] Không nhận được remote track',t.track_name,e);noteSfuMediaFailure(e?.message||'SUBSCRIBE_FAILED');setNotice('Một luồng âm thanh/hình ảnh chưa kết nối được. Hệ thống sẽ tiếp tục thử.','warn')}
       }
+      if((r.tracks||[]).length)noteSfuMediaSuccess();
       // D1 room-tracks is the authoritative active-media list. Require two consecutive
       // missing polls before cleaning a remote tile so a brief heartbeat delay cannot flicker video.
       for(const [key,entry] of [...remoteSfuStreams]){
@@ -412,7 +434,7 @@ async function liveRoom(classId,guestName=null){
         const video=entry.tile?.querySelector?.('video.remote-video'),audio=entry.tile?.querySelector?.('audio.remote-audio');if(video)video.srcObject=null;if(audio)audio.srcObject=null;
         if(entry.ownsTile)entry.tile?.remove();else entry.tile?.querySelector?.('.remote-fallback')?.classList.remove('hidden');remoteSfuStreams.delete(key);remoteMissingPolls.delete(key);syncPresentationStage();
       }
-    }catch(e){console.warn('[SLC Live] Không đồng bộ được danh sách media',e)}
+    }catch(e){console.warn('[SLC Live] Không đồng bộ được danh sách media',e);noteSfuMediaFailure(e?.message||'DISCOVERY_FAILED')}
   }
 
   function updateUI(){
@@ -558,7 +580,7 @@ async function liveRoom(classId,guestName=null){
     if(m.type==='offer'&&!sfuMode){const pc=await ensurePeer(m.from,false,{name:m.fromName,role:m.fromRole});if(!pc)return;const collision=pc._sfnMakingOffer||pc.signalingState!=='stable';const polite=!shouldInitiatePeer(m.from);if(collision&&!polite)return;if(collision){try{await pc.setLocalDescription({type:'rollback'})}catch{}}await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc);const ans=await pc.createAnswer();await pc.setLocalDescription(ans);await waitIceComplete(pc);await sendRealtime({type:'answer',to:m.from,sdp:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}})}
     else if(m.type==='answer'&&!sfuMode){try{const pc=await ensurePeer(m.from);if(pc){await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc)}}catch(e){console.warn('[SLC Live] P2P answer',e);setNotice('Không hoàn tất được kết nối âm thanh/hình ảnh với một thành viên. Hệ thống sẽ thử lại.','warn')}}
     else if(m.type==='ice'&&!sfuMode){await addPeerIce(m.from,m.candidate)}
-    else if(sfuMode&&m.type==='media-track-published'){await sfu?.subscribe({sessionId:m.sessionId,trackName:m.trackName,kind:m.kind,source:m.source,ownerName:m.fromName||m.ownerName,ownerKey:m.from,role:m.fromRole}).catch(e=>{console.warn('[SLC Live] subscribe realtime',e);setNotice('Đang kết nối âm thanh/hình ảnh của thành viên…','warn')})}
+    else if(sfuMode&&m.type==='media-track-published'){await sfu?.subscribe({sessionId:m.sessionId,trackName:m.trackName,kind:m.kind,source:m.source,ownerName:m.fromName||m.ownerName,ownerKey:m.from,role:m.fromRole}).then(()=>noteSfuMediaSuccess()).catch(e=>{console.warn('[SLC Live] subscribe realtime',e);noteSfuMediaFailure(e?.message||'REALTIME_SUBSCRIBE_FAILED');setNotice('Đang kết nối âm thanh/hình ảnh của thành viên…','warn')})}
     else if(sfuMode&&m.type==='media-track-unpublished'){const key=mediaKey(m),entry=remoteSfuStreams.get(key);if(entry){entry.tile?.remove();remoteSfuStreams.delete(key);syncPresentationStage()}}
     else if(m.type==='chat')appendChat(m.fromName||'Thành viên',m.text,false,'fb-'+m.id);
     else if(m.type==='reaction')showReaction(m.emoji||'👏',m.fromName||'Thành viên');
@@ -603,7 +625,7 @@ async function liveRoom(classId,guestName=null){
       else if(m.type==='roster-state'){const incoming=new Map(arr(m?.roster).filter(p=>p?.id!==m?.peerId).map(p=>[p.id,p]));for(const id of [...peerMeta.keys()])if(!incoming.has(id))removePeer(id);for(const p of incoming.values())await ensurePeer(p.id,false,p);refreshPeople()}
       else if(m.type==='peer-joined')await ensurePeer(m.peer.id,!sfuMode&&shouldInitiatePeer(m.peer.id),m.peer);
       else if(m.type==='peer-left'){removePeer(m.peerId)}
-      else if(sfuMode&&m.type==='media-track-published'){await sfu?.subscribe({sessionId:m.sessionId,trackName:m.trackName,kind:m.kind,source:m.source,ownerName:m.fromName||m.ownerName,ownerKey:m.from,role:m.fromRole}).catch(e=>{console.warn('[SLC Live] subscribe realtime',e);setNotice('Đang kết nối âm thanh/hình ảnh của thành viên…','warn')})}
+      else if(sfuMode&&m.type==='media-track-published'){await sfu?.subscribe({sessionId:m.sessionId,trackName:m.trackName,kind:m.kind,source:m.source,ownerName:m.fromName||m.ownerName,ownerKey:m.from,role:m.fromRole}).then(()=>noteSfuMediaSuccess()).catch(e=>{console.warn('[SLC Live] subscribe realtime',e);noteSfuMediaFailure(e?.message||'REALTIME_SUBSCRIBE_FAILED');setNotice('Đang kết nối âm thanh/hình ảnh của thành viên…','warn')})}
       else if(sfuMode&&m.type==='media-track-unpublished'){const key=mediaKey(m),entry=remoteSfuStreams.get(key);if(entry){entry.tile?.remove();remoteSfuStreams.delete(key)}}
       else if(!sfuMode&&m.type==='offer'){const pc=await ensurePeer(m.from,false,{name:m.fromName,role:m.fromRole});if(pc){const collision=pc._sfnMakingOffer||pc.signalingState!=='stable';const polite=!shouldInitiatePeer(m.from);if(collision&&!polite)return;if(collision){try{await pc.setLocalDescription({type:'rollback'})}catch{}}await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc);const ans=await pc.createAnswer();await pc.setLocalDescription(ans);await waitIceComplete(pc);await sendRealtime({type:'answer',to:m.from,sdp:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}})}}
       else if(!sfuMode&&m.type==='answer'){try{const pc=await ensurePeer(m.from);if(pc){await pc.setRemoteDescription(m.sdp);await flushPeerIce(m.from,pc)}}catch(e){console.warn('[SLC Live] P2P answer',e);setNotice('Không hoàn tất được kết nối âm thanh/hình ảnh với một thành viên. Hệ thống sẽ thử lại.','warn')}}
@@ -688,7 +710,7 @@ async function liveRoom(classId,guestName=null){
   }
   if(sfuMode&&sfu){
     sfuTrackPoll=setInterval(()=>{if(!document.hidden)discoverSfuTracks()},2500);
-    let heartbeatFailures=0;sfuHeartbeat=setInterval(()=>{if(document.hidden||!sfu)return;sfu.heartbeat?.().then(()=>{heartbeatFailures=0}).catch(e=>{heartbeatFailures++;console.warn('[SLC Live] media heartbeat',e);if(heartbeatFailures===1)setConnection('Media chập chờn',false);if(heartbeatFailures>=2){setNotice('Kết nối media đang gián đoạn. Hệ thống đang tự khôi phục.','warn');sfu?.recoverIce?.().catch(err=>{console.warn('[SLC Live] recover after heartbeat',err);setNotice('Chưa thể khôi phục âm thanh/hình ảnh. Hãy kiểm tra mạng và thử lại.','bad')})}})},12000);
+    let heartbeatFailures=0;sfuHeartbeat=setInterval(()=>{if(document.hidden||!sfu)return;sfu.heartbeat?.().then(()=>{heartbeatFailures=0}).catch(e=>{heartbeatFailures++;console.warn('[SLC Live] media heartbeat',e);if(heartbeatFailures===1)setConnection('Media chập chờn',false);if(heartbeatFailures>=2){setNotice('Kết nối media đang gián đoạn. Hệ thống đang tự khôi phục.','warn');sfu?.recoverIce?.().then(()=>{heartbeatFailures=0;noteSfuMediaSuccess()}).catch(err=>{console.warn('[SLC Live] recover after heartbeat',err);noteSfuMediaFailure(err?.message||'HEARTBEAT_RECOVERY_FAILED');setNotice('Chưa thể khôi phục media chính. Hệ thống sẽ tự chuyển kết nối nếu cần.','warn')})}})},12000);
   }else{
     sfuMode=false;mediaTransportState='P2P_FALLBACK';setAdaptiveVideo(Number(classroomData.settings?.adaptive_video??1)!==0,Number(classroomData.settings?.max_visible_videos||12));
     setConnection('Kết nối tương thích',false);setNotice('Đang dùng kết nối tương thích cho âm thanh và hình ảnh.','warn');

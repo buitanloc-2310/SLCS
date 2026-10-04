@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "npx --yes wrangler@4.34.0 pages dev public",
-    "check": "node --check src/index.js && node --check src/schema-v11.js && node --check src/live-room.js && node --check src/realtime-sfu.js && node --check src/v13-platform.js && node --check src/vplus-platform.js && node --check public/app.js && node --check public/ui-system.js && node --check functions/api/[[path]].js",
+    "check": "node --check src/index.js && node --check src/schema-v11.js && node --check src/v13-platform.js && node --check src/vplus-platform.js && node --check public/app.js && node --check public/ui-system.js && node --check functions/api/[[path]].js",
     "validate:production": "npm run check && node scripts/validate-production.mjs",
     "db:migrate": "npx --yes wrangler@4.34.0 d1 migrations apply skyfirsthoctap --remote",
     "db:migrate:local": "npx --yes wrangler@4.34.0 d1 migrations apply skyfirsthoctap --local",

@@ -10,7 +10,7 @@ const checks=[
  ['PDF extraction',/pdfjs-dist/.test(app)],
  ['Material opens builder',/slc_import_material/.test(app)&&/openExamBuilder\(classId\)/.test(app)],
  ['No blank JSON material preview',!app.includes("window.open('','_blank')")],
- ['Material backend accepts all file types',/validateUpload\(file,\{maxMb:50,label:'Học liệu'\}/.test(api)&&!/materialMimes/.test(api)],
+ ['Material backend accepts all file types',/validateUpload\(file,\{maxMb:(?:50|maxUpload),label:'Học liệu'\}/.test(api)&&!/materialMimes/.test(api)],
  ['Import preview status',/Hãy kiểm tra trước khi xuất bản/.test(app)],
  ['300 question ceiling',/slice\(0,300\)/.test(app)]
 ];

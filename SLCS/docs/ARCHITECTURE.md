@@ -8,7 +8,7 @@ SLCS được triển khai theo mô hình Cloudflare Pages + Pages Functions. AP
 2. **Authentication & IAM** — session, account, role/permission và organization scope.
 3. **Learning Core** — classes, materials, assignments, submissions, gradebook, attendance, progress.
 4. **Assessment Center** — engine đánh giá dùng chung cho exam, quiz, evaluation, selection, survey và các profile tùy chỉnh.
-5. **Live Classroom** — media client, classroom runtime, realtime/SFU foundation và fallback signaling.
+5. **Exam Domain** — domain dự thi riêng nhận token khởi chạy và sử dụng API chấm/nộp bài của hệ thống học tập.
 6. **Website Studio** — branding/content configuration, revisions và publish workflow.
 7. **Operations** — organization, automation, analytics, diagnostics và admin control.
 8. **Persistence** — Cloudflare D1; migration lịch sử nằm trong `migrations/`. `src/schema-v11.js` là installer hợp nhất dùng cho bootstrap/repair schema.

@@ -1,35 +1,13 @@
-# SLCS Production Release
+# SLCS — bản nâng cấp 05/10/2026
 
-Đây là bản production hợp nhất. Tên release bên ngoài không mang số phiên bản; các tên migration lịch sử vẫn được giữ để tương thích database.
+Bản này giữ các chức năng tài khoản, học tập, đánh giá, Website Studio và vận hành; giao diện được đồng nhất và sửa các lỗi phiên đăng nhập, thời gian thi, bộ nhớ đệm và biểu mẫu.
 
-## Phạm vi chức năng
+Cổng kiểm tra: `npm run validate:all` (Node.js >=22.13). Build production: `npm run build`.
 
-- Public site, login, account request/activation và chính sách.
-- Dashboard theo tài khoản, lớp học và thành viên.
-- Learning Core: học liệu, bài tập, nộp bài, chấm điểm, sổ điểm, điểm danh, tiến độ.
-- Assessment Center đa mục đích: thi, kiểm tra, đánh giá, sát hạch, tuyển chọn, cuộc thi, khảo sát và cấu hình tùy chỉnh.
-- Live Classroom: prejoin, mic/camera, chọn thiết bị, screen share, realtime/SFU fallback và recovery.
-- Website Studio: chỉnh nội dung/branding, draft, preview, publish và revision history.
-- IAM, organization, automation, analytics và Operations Center.
+Mật khẩu dùng PBKDF2 v3 với 100.000 vòng và hỗ trợ nâng cấp hash cũ khi đăng nhập. Cookie có HttpOnly, Secure, SameSite=Lax. Thời hạn UTC của SQLite và ISO được chuẩn hóa khi kiểm tra. Phúc khảo phải thuộc tổ chức đang chọn.
 
-## Hardening chính
+Phòng học video/WebRTC không còn runtime trong bản này. Asset cũ đã được dọn; quyền camera/microphone/display capture vẫn bị chặn. Hệ thống dự thi riêng vẫn dùng `EXAM_URL` đã cấu hình.
 
-- Chuẩn hóa dữ liệu tài khoản và API boundary để chịu được `null`, object/array thiếu field và dữ liệu cũ.
-- Authenticated shell không phụ thuộc vào `full_name` luôn là chuỗi.
-- Các API phụ ở lớp/Assessment/Admin/Support được cô lập lỗi; một component lỗi không được làm sập toàn bộ ứng dụng.
-- Runtime kiểm tra/repair schema trước các API xác thực để giảm lỗi do database production cũ hoặc chưa đủ migration.
-- Assessment không gửi đáp án đúng xuống client trước khi nộp.
-- Strict exam gửi sự kiện rời trang bằng request `keepalive`.
-- PBKDF2 hiện dùng 10.000 vòng theo yêu cầu của dự án.
-- Camera/microphone/display capture được khai báo trong Permissions Policy.
-- Không có runtime AI; migration DROP legacy AI tables được giữ để dọn dữ liệu cũ an toàn.
+Không có thay đổi migration trong bản nâng cấp này; giữ nguyên 29 migration và installer hiện có. Cấu hình D1/R2 và secret phải được xác nhận ở môi trường triển khai.
 
-## Release gate
-
-Cổng chính:
-
-```bash
-npm run validate:production
-```
-
-Ngoài cổng tĩnh, trước khi đóng gói production cần chạy audit API/schema/SQL/browser/media/realtime trong bộ kiểm thử phát triển. Sau khi deploy vẫn phải smoke test domain Cloudflare và thiết bị mic/camera thật vì môi trường local không thể chứng minh binding/D1/R2/SFU/permission của production bên ngoài.
+Xem `docs/UPGRADE-2026-10-05.md` và `DEPLOY-CLOUDFLARE.md` để đối chiếu thay đổi và phạm vi kiểm tra.

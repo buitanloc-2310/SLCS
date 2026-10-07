@@ -27,11 +27,13 @@ check('class optional data isolated',app.includes('Promise.allSettled')&&app.inc
 check('assessment center degrades without shell crash',app.includes("[exam-center]")&&app.includes("let j={exams:[]},loadError=''") );
 check('admin critical reads degrade',app.includes("[admin stats]")&&app.includes("[admin users]"));
 check('support read degrades',app.includes("[support]")&&app.includes("return {tickets:[],load_error"));
-check('exam answers redacted server side',api.includes('publicExamQuestions')&&api.includes('delete')===false ? api.includes('const {answer,...safe}=') : api.includes('const {answer,...safe}='));
+check('exam answers redacted server side',api.includes('function publicExamQuestions')&&api.includes('answer_json')&&api.includes('rubric_json')&&api.includes('scoring_config')&&api.includes('...safe')&&api.includes('questions:publicExamQuestions'))
 check('assessment multi-purpose profiles',app.includes('volunteer_evaluation')&&app.includes('competition')&&app.includes('survey'));
 check('learning core present',api.includes('gradebook_categories')&&api.includes('learning-summary')&&api.includes('/attendance'));
 check('website studio revisions present',api.includes('/api/admin/website/revisions')&&app.includes('editorDraftState'));
 check('operations/IAM present',api.includes('/api/admin/v39/roles')&&api.includes('/api/admin/v39/automations')&&api.includes('/api/admin/v39/analytics'));
+check('digital education operations schema',schema.includes('0028_digital_education_operations_2026')&&schema.includes('education_programs')&&schema.includes('class_sessions')&&schema.includes('assessment_attempt_leases'));
+check('exam delivery resilience schema',schema.includes('assessment_response_files')&&schema.includes('security_profile')&&schema.includes('exam_freeze_windows'));
 check('video/live classroom runtime absent',!sourceRuntime.includes('getUserMedia')&&!sourceRuntime.includes('RTCPeerConnection')&&!sourceRuntime.includes('/api/live/')&&!sourceRuntime.includes('/api/public/live/')&&!sourceRuntime.includes('LiveRoom')&&!sourceRuntime.includes('realtimeSfu'));
 check('camera/mic/screen permissions denied',api.includes("permissions-policy':'camera=(), microphone=(), display-capture=(), geolocation=()"));
 check('removed classroom assets absent',!fs.existsSync('public/classroom')&&!fs.existsSync('public/join.html')&&!fs.existsSync('src/live-room.js')&&!fs.existsSync('src/realtime-sfu.js'));
@@ -44,7 +46,7 @@ check('asset build token is neutral',!!build&&!/40\.0|v40/i.test(build));
 check('index assets share build token',build&&['styles.css','auth-shell.css','design-system.css'].every(f=>idx.includes(`${f}?build=${build}`)));
 check('app lazy assets share build token',build&&['ui-system.js','vendor/slc-qrcode.js'].every(f=>app.includes(`${f}?build=${build}`)));
 check('no stale numbered cache in public entry',!idx.includes('40.0.1')&&!app.includes('40.0.1'));
-check('29 canonical migrations',migrations.length===29&&new Set(migrations).size===29);
+check('30 canonical migrations',migrations.length===30&&new Set(migrations).size===30);
 check('installer embeds every canonical migration',migrations.every(f=>schema.includes(path.basename(f,'.sql'))));
 check('no backup source files',!function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isDirectory()){if(walk(p))return true}else if(/\.bak(?:-|$)|\.orig$|~$/.test(e.name))return true}return false}('.'));
 check('functions API delegates to canonical backend',read('functions/api/[[path]].js').includes("from '../../src/index.js'"));

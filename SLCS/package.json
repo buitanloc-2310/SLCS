@@ -10,7 +10,7 @@
     "db:migrate": "npx --yes wrangler@4.34.0 d1 migrations apply skyfirsthoctap --remote",
     "db:migrate:local": "npx --yes wrangler@4.34.0 d1 migrations apply skyfirsthoctap --local",
     "deploy": "npx --yes wrangler@4.34.0 pages deploy public --project-name slc",
-    "deploy:production": "npm run validate:production && npm run db:migrate && npm run deploy",
+    "deploy:production": "npm run validate:all && node -e \"if(process.env.SLCS_RELEASE_READY!=='YES'){console.error('Release blocked: confirm exam freeze/preflight, then set SLCS_RELEASE_READY=YES');process.exit(2)}\" && npm run deploy",
     "build": "npm run validate:production",
     "validate:runtime": "node scripts/validate-runtime.mjs",
     "validate:all": "npm run validate:production && npm run validate:runtime"
